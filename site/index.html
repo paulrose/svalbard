@@ -1,366 +1,143 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="Svalbard is an open-source database backup CLI written in Rust. PostgreSQL and MySQL backups to S3, R2, and SSH storage are in development."
+      content="Svalbard is an open-source database backup CLI written in Rust. It is in development."
     />
-    <title>Svalbard — Database backup CLI</title>
+    <title>Svalbard</title>
     <link rel="icon" href="./assets/mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.mjs"></script>
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <header class="site-header wrap">
-      <a class="mountain-mark" href="#" aria-label="Svalbard home">
-        <svg viewBox="0 0 56 36" aria-hidden="true">
-          <path d="M1 33 21 3l12 18 8-12 14 24H1Z" fill="currentColor" />
-          <path
-            d="m15 12 6-9 9 14-9-4-4 5-2-6Zm20 6 6-9 7 12-7-3-3 4-3-4Z"
-            fill="var(--paper)"
-          />
-        </svg>
-      </a>
-      <nav aria-label="Main navigation">
-        <a href="#docs">Documentation</a><a href="#about">About</a>
+    <a class="skip" href="#main">Skip to content</a>
+    <header>
+      <h1>
+        <a class="brand" href="./"
+          ><svg viewBox="0 0 56 36" aria-hidden="true">
+            <path d="M1 33 21 3l12 18 8-12 14 24H1Z" fill="currentColor" />
+            <path
+              d="m15 12 6-9 9 14-9-4-4 5-2-6Zm20 6 6-9 7 12-7-3-3 4-3-4Z"
+              fill="var(--paper)"
+            /></svg
+          >svalbard</a
+        >
+      </h1>
+      <nav aria-label="Main">
+        <a href="#docs">Documentation</a
+        ><a href="https://github.com/paulrose/svalbard">GitHub</a>
       </nav>
-      <fieldset
-        class="theme-control"
-        aria-describedby="theme-explanation"
-        disabled
-      >
-        <legend class="sr-only">Page appearance</legend>
-        <label
-          ><input type="radio" name="theme" value="auto" checked /><span
-            >Auto</span
-          ></label
-        >
-        <label
-          ><input type="radio" name="theme" value="light" /><span
-            >Day</span
-          ></label
-        >
-        <label
-          ><input type="radio" name="theme" value="dark" /><span
-            >Night</span
-          ></label
-        >
-      </fieldset>
     </header>
     <main id="main">
-      <section class="intro" aria-labelledby="project-name">
-        <div class="intro-content wrap">
-          <div class="project-description">
-            <h1 id="project-name">svalbard</h1>
-            <p class="description">
-              A command-line tool for backing up PostgreSQL and MySQL to S3, R2,
-              or a server over SSH.
-            </p>
-            <p>Written in Rust. Open source, under the MIT license.</p>
-            <p>
-              Configuration files and environment variables for local use and
-              CI. A shared GitHub Action is planned.
-            </p>
-            <p class="development-status">
-              <strong>In development.</strong> The CLI currently supports help
-              and version output. Backup and restore commands are not available
-              yet.
-            </p>
-          </div>
-          <section class="demo" id="demo" aria-labelledby="demo-title">
-            <div class="demo-heading">
-              <h2 id="demo-title">Backup example</h2>
-              <span>Simulation</span>
-            </div>
-            <div class="adapter-controls">
-              <label
-                >Database<select id="database">
-                  <option value="postgres">PostgreSQL</option>
-                  <option value="mysql">MySQL</option>
-                </select></label
-              >
-              <span class="adapter-arrow" aria-hidden="true">→</span>
-              <label
-                >Destination<select id="destination">
-                  <option value="s3">Amazon S3</option>
-                  <option value="r2">Cloudflare R2</option>
-                  <option value="sftp">SFTP</option>
-                  <option value="scp">SCP</option>
-                </select></label
-              >
-            </div>
-            <p class="command">
-              <span class="prompt">$</span> svalbard backup
-              <span>--config backup.toml</span>
-            </p>
-            <div id="terminal-lines" class="terminal-lines" aria-hidden="true">
-              <p class="terminal-line">Waiting to start.</p>
-            </div>
-            <div class="terminal-progress">
-              <span id="progress-fill"></span>
-            </div>
-            <div class="terminal-bottom">
-              <span id="terminal-caption"
-                >Select a database and destination.</span
-              ><span id="progress-number">0%</span>
-            </div>
-            <div class="demo-transport">
-              <div class="journey" aria-label="Backup stages">
-                <span class="journey-step">Snapshot</span
-                ><span class="journey-track" aria-hidden="true">→</span
-                ><span class="journey-step">Local file</span
-                ><span class="journey-track" aria-hidden="true">→</span
-                ><span class="journey-step">Upload</span>
-              </div>
-              <button id="play-demo" type="button" disabled>
-                <span id="play-label">Run example</span
-                ><span id="play-icon" aria-hidden="true">▶</span>
-              </button>
-            </div>
-            <p class="demo-note">
-              Shows the planned workflow. No database connection is made.
-            </p>
-            <p
-              class="sr-only"
-              id="demo-announcement"
-              role="status"
-              aria-live="polite"
-            ></p>
-            <noscript
-              ><p class="no-script">
-                Enable JavaScript to run the example and set the theme from
-                Arctic daylight.
-              </p></noscript
-            >
-          </section>
-        </div>
-        <div class="arctic-landscape" aria-hidden="true">
-          <svg viewBox="0 0 1600 400" preserveAspectRatio="xMidYMax slice">
-            <defs>
-              <pattern
-                id="water-lines"
-                width="110"
-                height="17"
-                patternUnits="userSpaceOnUse"
-              >
-                <path
-                  d="M0 8h46m30 0h20"
-                  fill="none"
-                  stroke="var(--water-line)"
-                  stroke-width=".65"
-                />
-              </pattern>
-            </defs>
-            <g class="stars" fill="var(--star)">
-              <circle cx="112" cy="35" r="1.2" />
-              <circle cx="304" cy="55" r="1.4" />
-              <circle cx="566" cy="15" r="1" />
-              <circle cx="718" cy="67" r="1.3" />
-              <circle cx="977" cy="24" r="1" />
-              <circle cx="1227" cy="55" r="1.4" />
-              <circle cx="1432" cy="15" r="1.2" />
-              <path
-                d="M1340 53v8m-4-4h8"
-                stroke="var(--star)"
-                stroke-width=".8"
-              />
-            </g>
-            <circle
-              class="arctic-sun"
-              cx="255"
-              cy="111"
-              r="32"
-              fill="var(--sun)"
-            />
-            <path
-              d="M0 282 70 244 114 255 202 150 253 202 309 177 406 270 472 235 541 280 629 200 702 238 769 185 849 264 919 226 985 272 1094 191 1157 217 1232 148 1295 205 1380 170 1465 243 1544 225 1600 267V400H0Z"
-              fill="var(--ridge-far)"
-            />
-            <path
-              d="m121 251 81-101 51 52 56-25 97 93-103-53-47 17-44-38-41 56-23-17-27 16Zm880 14 93-74 63 26 75-69 63 57 85-35 85 73-89-40-71 39-58-48-65 51-74-22-107 42Z"
-              fill="var(--snow-far)"
-            />
-            <path
-              d="M0 304 61 279 118 298 206 235 265 276 346 246 412 293 493 272 564 308 642 279 702 302 780 284 868 312 972 280 1025 303 1091 262 1130 273 1194 244 1284 294 1339 261 1425 296 1493 270 1600 306V400H0Z"
-              fill="var(--ridge-mid)"
-            />
-            <path
-              d="M0 326c201-17 316 3 515-7s350-1 542 12 362-22 543-8v77H0Z"
-              fill="var(--water)"
-            />
-            <path
-              d="M0 326c201-17 316 3 515-7s350-1 542 12 362-22 543-8v77H0Z"
-              fill="url(#water-lines)"
-            />
-            <path
-              d="m0 355 62-17 48 9 81-36 47 15 59-8 74 30 67 5 112 47H0Zm1070 45 91-40 65-7 68-43 40 10 46-29 69 57 45-12 106 30v34Z"
-              fill="var(--shore)"
-            />
-            <g fill="none" stroke="var(--contour)" stroke-width=".7">
-              <path
-                d="m0 365 65-19 47 10 78-34 46 14 62-7 72 29 66 5 89 37M0 377l65-19 47 10 78-33 46 13 63-7 70 29 66 4 57 26m655 0 80-30 65-8 65-41 38 11 44-28 70 56 45-13 106 30m-426 23 59-20 64-7 63-41 38 12 44-28 71 56 44-14 103 30"
-              />
-              <path
-                d="m225 239 34 45 87-24 61 41m698-34-43 41m144-54 74 46m108-121 45 47-26 14m-566-31 39 42-17 9M202 153l17 37-16 31"
-              />
-            </g>
-            <g stroke="var(--survey)" stroke-width="1">
-              <path
-                d="M794 341h12m-6-6v12M190 197h12m-6-6v12M1226 148h12m-6-6v12"
-              />
-              <circle cx="800" cy="341" r="14" fill="none" opacity=".5" />
-            </g>
-          </svg>
-        </div>
-      </section>
-      <div class="location-strip wrap">
-        <span
-          >Longyearbyen, Svalbard
-          <span class="coordinates">78°13′ N, 15°38′ E</span></span
-        >
-        <div class="daylight-status">
-          <span id="arctic-clock">Local time</span
-          ><span id="arctic-phase">Automatic daylight theme</span>
-        </div>
-      </div>
-      <p id="theme-explanation" class="sr-only">
-        Auto follows the estimated solar elevation in Longyearbyen. Weather and
-        mountain shadows are not modeled. Day and Night are manual previews.
-      </p>
-
-      <section
-        class="docs wrap text-section"
-        id="docs"
-        aria-labelledby="docs-title"
-      >
-        <div class="section-heading">
-          <h2 id="docs-title">Documentation</h2>
-          <p>Sections will be added as the features are implemented.</p>
-        </div>
-        <div class="doc-sections">
-          <details open>
-            <summary>
-              <span>Getting started</span
-              ><span class="expand-icon" aria-hidden="true">+</span>
-            </summary>
-            <div class="doc-content">
-              <p>
-                With repository access and Rust installed, build the current
-                CLI:
-              </p>
-              <pre><code>cargo build --locked --release
-./target/release/svalbard --help
-./target/release/svalbard --version</code></pre>
-              <p>The repository is private during initial development.</p>
-            </div>
-          </details>
-          <details>
-            <summary>
-              <span>Configuration &amp; secrets</span
-              ><span class="doc-status">Planned</span
-              ><span class="expand-icon" aria-hidden="true">+</span>
-            </summary>
-            <div class="doc-content">
-              <p>
-                Configuration files for backup jobs, environment variables for
-                credentials, and documented precedence. The format is still
-                being designed.
-              </p>
-            </div>
-          </details>
-          <details>
-            <summary>
-              <span>Database adapters</span
-              ><span class="doc-status">Planned</span
-              ><span class="expand-icon" aria-hidden="true">+</span>
-            </summary>
-            <div class="doc-content">
-              <p>
-                PostgreSQL and MySQL, using their native dump tools. MySQL
-                support starts with InnoDB.
-              </p>
-              <p>
-                Backups will use one worker by default, with deadlines and
-                contention checks. PostgreSQL snapshots can conflict with schema
-                changes. Prefer replicas; backups cannot guarantee zero impact.
-              </p>
-              <p>The database snapshot must close before upload begins.</p>
-            </div>
-          </details>
-          <details>
-            <summary>
-              <span>Storage adapters</span
-              ><span class="doc-status">Planned</span
-              ><span class="expand-icon" aria-hidden="true">+</span>
-            </summary>
-            <div class="doc-content">
-              <p>
-                Amazon S3, Cloudflare R2, and SSH servers using SFTP or SCP. New
-                destinations can be added through separate adapters.
-              </p>
-              <p>
-                Partial uploads must never be reported as successful backups.
-              </p>
-            </div>
-          </details>
-          <details>
-            <summary>
-              <span>CI &amp; GitHub Actions</span
-              ><span class="doc-status">Planned</span
-              ><span class="expand-icon" aria-hidden="true">+</span>
-            </summary>
-            <div class="doc-content">
-              <p>
-                Run the CLI directly or use a shared, versioned GitHub Action.
-                Both will accept secrets from the CI environment.
-              </p>
-              <p>
-                Noninteractive commands, machine-readable output, and documented
-                exit codes.
-              </p>
-            </div>
-          </details>
-          <details>
-            <summary>
-              <span>Restore</span><span class="doc-status">Later</span
-              ><span class="expand-icon" aria-hidden="true">+</span>
-            </summary>
-            <div class="doc-content">
-              <p>
-                A restore command follows the backup release. Before that
-                release, real backup files must pass restore tests with the
-                database’s own tools.
-              </p>
-            </div>
-          </details>
-        </div>
-      </section>
-      <section
-        class="about wrap text-section"
-        id="about"
-        aria-labelledby="about-title"
-      >
-        <div class="section-heading">
-          <h2 id="about-title">Why Svalbard?</h2>
-        </div>
-        <div class="about-copy">
-          <p>
-            Svalbard is the Arctic archipelago that houses the
-            <a href="https://www.seedvault.no/about/the-seeds/"
-              >Global Seed Vault</a
-            >. The vault stores backup copies of seeds from collections around
-            the world. That backup role is where the project’s name comes from.
+      <section class="scene" aria-label="Illustration of a planned backup run">
+        <canvas aria-hidden="true"></canvas>
+        <div class="labels" aria-hidden="true">
+          <p class="label trigger" data-anchor="trigger">
+            <span class="name" data-text="trigger">cron</span
+            ><span class="detail" data-text="schedule">0 2 * * *</span
+            ><span class="state" data-text="clock">01:59:57</span>
+          </p>
+          <p class="label" data-anchor="database">
+            <span class="name" data-text="database">PostgreSQL</span
+            ><span class="state" data-text="snapshot"></span>
+          </p>
+          <p class="label" data-anchor="svalbard">
+            <span class="name">svalbard</span
+            ><span class="state" data-text="svalbard"></span>
+          </p>
+          <p class="label" data-anchor="storage">
+            <span class="name" data-text="storage">Amazon S3</span
+            ><span class="state" data-text="stored"></span>
           </p>
         </div>
+        <noscript
+          ><p class="no-script">
+            A scheduled job starts Svalbard. It copies the database from a
+            snapshot, closes the snapshot, then uploads the backup to storage.
+          </p></noscript
+        >
+        <p class="sr-only">
+          A cron job or scheduled CI workflow starts Svalbard. Svalbard opens a
+          snapshot of a PostgreSQL or MySQL database and writes a backup from
+          it. The snapshot closes. Only then does Svalbard upload the backup to
+          storage, where it settles beside earlier backups.
+        </p>
+      </section>
+
+      <div class="intro">
+        <p>
+          Svalbard is an open-source database backup CLI, written in Rust. It is
+          in development. The scene shows planned behaviour.
+        </p>
+        <p class="adapters">
+          PostgreSQL, MySQL <span aria-hidden="true">→</span
+          ><span class="sr-only">to</span> Amazon S3, Cloudflare R2, SFTP, SCP
+        </p>
+      </div>
+
+      <section class="docs" id="docs" aria-labelledby="docs-title">
+        <h2 id="docs-title">Documentation</h2>
+        <div>
+          <p>
+            These pages are not written yet. The CLI currently prints help and
+            version output. Backup and restore commands are in development.
+          </p>
+          <pre><code>cargo build --locked --release
+./target/release/svalbard --help</code></pre>
+          <ul class="contents">
+            <li>
+              <span>Install</span><span>Build from source with Cargo</span>
+            </li>
+            <li>
+              <span>Configuration</span
+              ><span>Files and environment variables, secrets from CI</span>
+            </li>
+            <li>
+              <span>Scheduling</span
+              ><span>Cron, CI jobs and a GitHub Action</span>
+            </li>
+            <li>
+              <span>Databases</span
+              ><span>PostgreSQL and MySQL, snapshots and locks</span>
+            </li>
+            <li>
+              <span>Storage</span
+              ><span>Amazon S3, Cloudflare R2, SFTP and SCP</span>
+            </li>
+            <li>
+              <span>Restore</span><span>Follows the first backup release</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="origin" aria-labelledby="origin-title">
+        <h2 id="origin-title">The name</h2>
+        <p>
+          Svalbard is an Arctic archipelago. Near Longyearbyen, the
+          <a href="https://www.seedvault.no/">Svalbard Global Seed Vault</a>
+          keeps duplicate seed samples from gene banks around the world, so
+          their collections can be rebuilt if the originals are lost. In 2015,
+          the research centre ICARDA made the first withdrawal, to rebuild
+          collections that the war in Syria had cut off. The project takes its
+          name from the islands and the vault.
+        </p>
       </section>
     </main>
-    <footer class="site-footer wrap">
-      <span>Svalbard · MIT licensed</span
-      ><a href="https://github.com/paulrose/svalbard">Source on GitHub</a>
+    <footer>
+      <p>
+        <a href="https://github.com/paulrose/svalbard/blob/main/LICENSE"
+          >MIT License</a
+        >
+      </p>
+      <p>
+        Colours follow daylight in Longyearbyen:
+        <span data-daylight>Longyearbyen, Svalbard</span>
+      </p>
     </footer>
   </body>
 </html>

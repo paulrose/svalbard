@@ -40,13 +40,14 @@ python3 -m http.server 4173 --bind 127.0.0.1 --directory site
 ```
 
 Open <http://127.0.0.1:4173>. The backup animation is a simulation of the planned workflow.
-Auto appearance follows the estimated solar elevation in Longyearbyen. Day and Night provide manual previews.
-The estimate excludes weather and terrain. Reduced-motion settings show the completed example without animation.
+The colours follow the estimated solar elevation in Longyearbyen. The estimate excludes weather and terrain.
+Reduced-motion settings show one frame of the upload, after the snapshot has closed.
+For previews, `?theme=light` or `?theme=dark` overrides daylight, and `?at=<seconds>` holds the animation at one moment.
 
-Run the daylight checks with Node.js 18 or later:
+Run the site checks with Node.js 18 or later:
 
 ```sh
-node --test site/tests/daylight.test.mjs
+node --test site/tests/*.test.mjs
 ```
 
 ## License
