@@ -27,6 +27,8 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
+Database adapters must obey the [database safety contract](docs/database-safety.md).
+
 Create a branch for each change. Submit changes through a pull request.
 Keep PRs focused and include relevant check results. Review the diff before a solo merge.
 GitHub deletes merged head branches automatically.
