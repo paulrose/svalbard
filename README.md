@@ -1,7 +1,7 @@
 # Svalbard
 
 Svalbard is an open-source Rust CLI for database backups.
-This initial version provides help and version output. Backup and restore commands are not available yet.
+This version validates the configuration for a PostgreSQL backup to Amazon S3.
 
 ## Build and run
 
@@ -15,9 +15,77 @@ cargo build --locked --release
 ./target/release/svalbard --version
 ```
 
-Help and version output go to stdout with exit code `0`.
-Missing, unknown, or extra arguments produce a diagnostic on stderr with exit code `2`.
 The CLI does not prompt for input.
+
+## Configuration
+
+`svalbard config check` validates the configuration.
+It makes no network connections, so it cannot check connectivity, credentials or permissions.
+
+```sh
+./target/release/svalbard config check --config examples/svalbard.toml
+./target/release/svalbard config check --config examples/svalbard.toml --json
+```
+
+[`examples/svalbard.toml`](examples/svalbard.toml) is a complete example.
+`SVALBARD_CONFIG` can also give the path of the configuration file.
+
+Each setting has a TOML key, a flag and an environment variable.
+For example, `source.host` is also `--source-host` and `SVALBARD_SOURCE_HOST`.
+A flag takes precedence over its environment variable, the variable over the configuration file, and the file over the default.
+Unknown keys, empty values and invalid values are errors.
+
+| Key | Default | Values |
+| --- | --- | --- |
+| `source.type` | Required | `postgresql` |
+| `source.host` | Required | Host name |
+| `source.port` | `5432` | `1` to `65535` |
+| `source.database` | Required | Database name |
+| `source.user` | Required | User name |
+| `source.password_file` | None | Path to a file that holds the password |
+| `destination.type` | Required | `s3` |
+| `destination.bucket` | Required | Bucket name |
+| `destination.prefix` | Empty | Prefix for object keys |
+| `destination.region` | From the AWS configuration | AWS Region |
+| `safety.lock_timeout` | `10s` | `1s` to `5min` |
+| `safety.contention_timeout` | `2s` | `1s` to `60s` |
+| `safety.dump_timeout` | `1h` | `1min` to `24h` |
+| `safety.max_dump_size` | `20GiB` | `1MiB` to `16TiB` |
+| `safety.min_free_space` | `2GiB` | `0B` to `1TiB` |
+
+A duration is a whole number with `s`, `min` or `h`. A size is a whole number with `B`, `KiB`, `MiB`, `GiB` or `TiB`.
+The [database safety contract](docs/database-safety.md) explains the safety limits.
+
+### Secrets
+
+The configuration file and flags never hold secrets. The file rejects keys such as `password`.
+
+- Set the database password in `SVALBARD_SOURCE_PASSWORD`, or set `source.password_file` to a mounted secret file. Set one of them, not both.
+- If the database needs no password, set neither. An empty `SVALBARD_SOURCE_PASSWORD` is an error, because CI systems give an empty value for a missing secret.
+- For S3, Svalbard uses the AWS credential chain: environment variables such as `AWS_ACCESS_KEY_ID`, a shared AWS profile, a web identity token from CI, or an instance or container role. Static keys are not necessary.
+
+`config check` does not read the password. It checks that the password file opens.
+Secret values do not appear in errors or in the JSON result.
+
+```yaml
+# GitHub Actions
+- name: Check the Svalbard configuration
+  run: svalbard config check --config svalbard.toml --json
+  env:
+    SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}
+```
+
+### Output and exit codes
+
+Without `--json`, a valid configuration prints `Configuration is valid.` on stdout.
+With `--json`, stdout gets `{"valid":true}` or `{"valid":false,"error":"<message>"}`.
+Errors always go to stderr.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The configuration is valid, or the CLI printed help or version output. |
+| `2` | Usage error, such as an unknown flag. The output is not JSON. |
+| `3` | The configuration is invalid. |
 
 ## Development
 

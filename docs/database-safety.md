@@ -2,7 +2,7 @@
 
 Design note for [#6](https://github.com/paulrose/svalbard/issues/6).
 The rules apply to the PostgreSQL adapter ([#9](https://github.com/paulrose/svalbard/issues/9)) and the MySQL adapter ([#10](https://github.com/paulrose/svalbard/issues/10)).
-Configuration names are proposals for [#7](https://github.com/paulrose/svalbard/issues/7).
+The limits are the `[safety]` settings of the configuration.
 The facts in this note were checked on 2026-10-21 against the manuals and the client source code in [References](#references).
 
 ## Purpose and limits
@@ -78,7 +78,7 @@ Contention detection cancels the backup when a schema change waits for it.
 
 ## Limits
 
-| Limit | Proposed key | Default | Range | Enforcement | Failure |
+| Limit | Key | Default | Range | Enforcement | Failure |
 | --- | --- | --- | --- | --- | --- |
 | Dump workers | none | 1 | 1 | Svalbard never passes `--jobs` to `pg_dump`. `mysqldump` uses one connection. | — |
 | Lock wait for the backup | `lock_timeout` | 10 s | 1 s to 5 min | The watchdog. PostgreSQL also gets `--lock-wait-timeout`, and MySQL gets `lock_wait_timeout` through `--init-command`. | `lock_timeout` |
