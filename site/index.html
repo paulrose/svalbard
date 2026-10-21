@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Svalbard is an open-source database backup CLI, taking shape in Rust. Your databases. Your storage. A little peace of mind."
+    />
+    <title>Svalbard — A quiet place for your data.</title>
+    <link rel="icon" href="./assets/mark.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header wrap">
+      <a class="wordmark" href="#" aria-label="Svalbard home">
+        <svg viewBox="0 0 56 36" aria-hidden="true">
+          <path d="M1 33 21 3l12 18 8-12 14 24H1Z" fill="currentColor" />
+          <path
+            d="m15 12 6-9 9 14-9-4-4 5-2-6Zm20 6 6-9 7 12-7-3-3 4-3-4Z"
+            fill="var(--paper)"
+          />
+        </svg>
+        <span>svalbard<span class="wordmark-dot">.</span></span>
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#approach">The approach</a>
+        <a href="#docs">Documentation</a>
+        <a href="#origin">Our namesake</a>
+      </nav>
+      <span class="status-label"
+        ><span class="status-dot"></span> Taking shape</span
+      >
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-grid wrap">
+          <div class="hero-copy">
+            <p class="eyebrow">
+              <span class="tiny-cross">+</span> Database backups. On your terms.
+            </p>
+            <h1 id="hero-title">
+              A quiet place<br />for your <span class="serif">data.</span>
+            </h1>
+            <p class="hero-description">
+              From the databases you run to the storage you trust.<br
+                class="desktop-break"
+              />
+              A small, open-source backup tool, built in Rust.<br
+                class="desktop-break"
+              />
+              At home in your terminal. Ready to grow into your CI.
+            </p>
+            <div class="hero-actions">
+              <a class="button primary" href="#demo"
+                >Watch a backup <span aria-hidden="true">↗</span></a
+              >
+              <a class="text-link" href="#docs"
+                >Explore the field guide <span aria-hidden="true">→</span></a
+              >
+            </div>
+            <p class="hero-note">
+              MIT licensed <span aria-hidden="true">/</span> Self-hosted
+              <span aria-hidden="true">/</span> No service to sign up for
+            </p>
+          </div>
+
+          <div class="demo-shell" id="demo">
+            <div class="demo-heading">
+              <span class="eyebrow">A small rehearsal</span
+              ><span class="demo-tag">Interactive preview</span>
+            </div>
+            <div class="terminal">
+              <div class="terminal-title">
+                <span class="window-dots" aria-hidden="true"
+                  ><i></i><i></i><i></i></span
+                ><span>svalbard — backup</span
+                ><span class="terminal-symbol" aria-hidden="true">⌘</span>
+              </div>
+              <div class="adapter-controls">
+                <label
+                  >Database<select id="database">
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="mysql">MySQL</option>
+                  </select></label
+                >
+                <span class="adapter-arrow" aria-hidden="true">→</span>
+                <label
+                  >Destination<select id="destination">
+                    <option value="s3">Amazon S3</option>
+                    <option value="r2">Cloudflare R2</option>
+                    <option value="sftp">SFTP</option>
+                    <option value="scp">SCP</option>
+                  </select></label
+                >
+              </div>
+              <div class="terminal-output">
+                <p class="command">
+                  <span class="prompt">$</span> svalbard backup
+                  <span>--config backup.toml</span>
+                </p>
+                <div
+                  id="terminal-lines"
+                  class="terminal-lines"
+                  aria-hidden="true"
+                >
+                  <p class="terminal-line">
+                    <span class="log-time">00:00</span
+                    ><span class="log-symbol">·</span
+                    ><span>Ready when you are.</span>
+                  </p>
+                </div>
+                <div class="terminal-progress">
+                  <span id="progress-fill"></span>
+                </div>
+                <div class="terminal-bottom">
+                  <span id="terminal-caption"
+                    >An example, not a live backup.</span
+                  ><span id="progress-number">0%</span>
+                </div>
+              </div>
+              <div class="demo-transport">
+                <span class="demo-state"
+                  ><span id="playback-light" class="playback-light"></span
+                  ><span id="playback-state">Ready</span></span
+                >
+                <button id="play-demo" type="button" disabled>
+                  <span id="play-label">Run the preview</span
+                  ><span id="play-icon" aria-hidden="true">▶</span>
+                </button>
+              </div>
+            </div>
+            <div class="journey" aria-label="Backup stages">
+              <div class="journey-step" data-step="0">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <ellipse cx="12" cy="5" rx="7" ry="3" />
+                  <path d="M5 5v13c0 4 14 4 14 0V5M5 11c0 4 14 4 14 0" /></svg
+                ><span>Snapshot</span>
+              </div>
+              <div class="journey-track" aria-hidden="true"><span></span></div>
+              <div class="journey-step" data-step="1">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 4h14v16H5zM9 8h6M9 12h6M9 16h3" /></svg
+                ><span>Stage locally</span>
+              </div>
+              <div class="journey-track" aria-hidden="true"><span></span></div>
+              <div class="journey-step" data-step="2">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M7 18H5a4 4 0 0 1-1-8 7 7 0 0 1 13-3 5.5 5.5 0 0 1 1 11h-1M12 12v9m-3-3 3 3 3-3"
+                  /></svg
+                ><span>Your storage</span>
+              </div>
+            </div>
+            <p class="demo-disclaimer">
+              Planned workflow. Simulated data. Nothing connects to a database.
+            </p>
+            <p
+              class="sr-only"
+              id="demo-announcement"
+              role="status"
+              aria-live="polite"
+            ></p>
+            <noscript
+              ><p class="no-script">
+                Enable JavaScript to play the simulated backup and follow Arctic
+                daylight.
+              </p></noscript
+            >
+          </div>
+        </div>
+
+        <div class="arctic-landscape" aria-hidden="true">
+          <svg viewBox="0 0 1600 400" preserveAspectRatio="xMidYMax slice">
+            <defs>
+              <pattern
+                id="water-lines"
+                width="110"
+                height="17"
+                patternUnits="userSpaceOnUse"
+              >
+                <path
+                  d="M0 8h46m30 0h20"
+                  fill="none"
+                  stroke="var(--water-line)"
+                  stroke-width=".65"
+                />
+              </pattern>
+            </defs>
+            <g class="stars" fill="var(--star)">
+              <circle cx="112" cy="35" r="1.2" />
+              <circle cx="304" cy="55" r="1.4" />
+              <circle cx="566" cy="15" r="1" />
+              <circle cx="718" cy="67" r="1.3" />
+              <circle cx="977" cy="24" r="1" />
+              <circle cx="1227" cy="55" r="1.4" />
+              <circle cx="1432" cy="15" r="1.2" />
+              <path
+                d="M1340 53v8m-4-4h8"
+                stroke="var(--star)"
+                stroke-width=".8"
+              />
+            </g>
+            <circle
+              class="arctic-sun"
+              cx="255"
+              cy="111"
+              r="32"
+              fill="var(--sun)"
+            />
+            <path
+              d="M0 282 70 244 114 255 202 150 253 202 309 177 406 270 472 235 541 280 629 200 702 238 769 185 849 264 919 226 985 272 1094 191 1157 217 1232 148 1295 205 1380 170 1465 243 1544 225 1600 267V400H0Z"
+              fill="var(--ridge-far)"
+            />
+            <path
+              d="m121 251 81-101 51 52 56-25 97 93-103-53-47 17-44-38-41 56-23-17-27 16Zm880 14 93-74 63 26 75-69 63 57 85-35 85 73-89-40-71 39-58-48-65 51-74-22-107 42Z"
+              fill="var(--snow-far)"
+            />
+            <path
+              d="M0 304 61 279 118 298 206 235 265 276 346 246 412 293 493 272 564 308 642 279 702 302 780 284 868 312 972 280 1025 303 1091 262 1130 273 1194 244 1284 294 1339 261 1425 296 1493 270 1600 306V400H0Z"
+              fill="var(--ridge-mid)"
+            />
+            <path
+              d="M0 326c201-17 316 3 515-7s350-1 542 12 362-22 543-8v77H0Z"
+              fill="var(--water)"
+            />
+            <path
+              d="M0 326c201-17 316 3 515-7s350-1 542 12 362-22 543-8v77H0Z"
+              fill="url(#water-lines)"
+            />
+            <path
+              d="m0 355 62-17 48 9 81-36 47 15 59-8 74 30 67 5 112 47H0Zm1070 45 91-40 65-7 68-43 40 10 46-29 69 57 45-12 106 30v34Z"
+              fill="var(--shore)"
+            />
+            <g fill="none" stroke="var(--contour)" stroke-width=".7">
+              <path
+                d="m0 365 65-19 47 10 78-34 46 14 62-7 72 29 66 5 89 37M0 377l65-19 47 10 78-33 46 13 63-7 70 29 66 4 57 26m655 0 80-30 65-8 65-41 38 11 44-28 70 56 45-13 106 30m-426 23 59-20 64-7 63-41 38 12 44-28 71 56 44-14 103 30"
+              />
+              <path
+                d="m225 239 34 45 87-24 61 41m698-34-43 41m144-54 74 46m108-121 45 47-26 14m-566-31 39 42-17 9M202 153l17 37-16 31"
+              />
+            </g>
+            <g stroke="var(--survey)" stroke-width="1">
+              <path
+                d="M794 341h12m-6-6v12M190 197h12m-6-6v12M1226 148h12m-6-6v12"
+              />
+              <circle cx="800" cy="341" r="14" fill="none" opacity=".5" />
+            </g>
+          </svg>
+        </div>
+        <div class="location-strip wrap">
+          <div class="location">
+            <span class="location-marker" aria-hidden="true">✳</span>
+            <div>
+              <strong>Longyearbyen, Svalbard</strong
+              ><span>78°13′ N &nbsp; 15°38′ E</span>
+            </div>
+          </div>
+          <div class="daylight-status">
+            <span class="sun-symbol" aria-hidden="true">◐</span>
+            <div>
+              <strong id="arctic-clock">An Arctic rhythm</strong
+              ><span id="arctic-phase"
+                >Light follows the sun in Longyearbyen</span
+              >
+            </div>
+          </div>
+          <fieldset
+            class="theme-control"
+            aria-describedby="theme-explanation"
+            disabled
+          >
+            <legend class="sr-only">Page appearance</legend>
+            <label
+              ><input type="radio" name="theme" value="auto" checked /><span
+                >Auto</span
+              ></label
+            ><label
+              ><input type="radio" name="theme" value="light" /><span
+                >Day</span
+              ></label
+            ><label
+              ><input type="radio" name="theme" value="dark" /><span
+                >Night</span
+              ></label
+            >
+          </fieldset>
+        </div>
+        <p id="theme-explanation" class="sr-only">
+          Auto follows the estimated solar elevation in Longyearbyen, not your
+          device’s timezone. Weather and mountain shadows are not modeled. Day
+          and Night are manual previews.
+        </p>
+      </section>
+
+      <section
+        class="approach wrap section-space"
+        id="approach"
+        aria-labelledby="approach-title"
+      >
+        <div class="section-intro">
+          <p class="eyebrow">01 / The approach</p>
+          <h2 id="approach-title">
+            Useful by design.<br /><span class="muted">Quiet by default.</span>
+          </h2>
+          <p>
+            A backup tool has one job to earn your trust.<br />Here’s how we
+            want to earn it.
+          </p>
+        </div>
+        <div class="principles">
+          <article>
+            <span class="principle-number">[01]</span>
+            <h3>Your database comes first.</h3>
+            <p>
+              Bounded snapshots, one worker by default, and an exit when a
+              backup gets in the way. Close the database snapshot before the
+              upload begins.
+            </p>
+            <span class="principle-note"
+              >Careful by design. Never zero impact.</span
+            >
+          </article>
+          <article>
+            <span class="principle-number">[02]</span>
+            <h3>Bring your own everything.</h3>
+            <p>
+              Start with PostgreSQL or MySQL. Send backups to S3, R2, or your
+              own SSH server. Separate adapters make room for what comes next.
+            </p>
+            <span class="principle-note">Your infrastructure. Your keys.</span>
+          </article>
+          <article>
+            <span class="principle-number">[03]</span>
+            <h3>A terminal is all you need.</h3>
+            <p>
+              Readable configuration. Secrets from your CI environment.
+              Predictable exit codes. A shared GitHub Action is on the map, too.
+            </p>
+            <span class="principle-note">No dashboard required.</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="docs-section" id="docs" aria-labelledby="docs-title">
+        <div class="docs-grid wrap section-space">
+          <div class="docs-intro">
+            <p class="eyebrow">02 / The field guide</p>
+            <h2 id="docs-title">
+              Room to<br /><span class="serif">find your way.</span>
+            </h2>
+            <p>
+              This will become the Svalbard docs.<br />For now, a look at what’s
+              taking shape.
+            </p>
+            <div class="development-note">
+              <span class="status-dot"></span>
+              <p>
+                <strong>Early days. Deliberate steps.</strong>The CLI currently
+                supports help and version output. Backups, adapters, and the
+                Action are still ahead. Restore follows the backup release.
+              </p>
+            </div>
+          </div>
+          <div class="doc-sections">
+            <details open>
+              <summary>
+                <span class="doc-index">01</span><span>Getting started</span
+                ><span class="doc-status available">Available now</span
+                ><span class="expand-icon" aria-hidden="true">+</span>
+              </summary>
+              <div class="doc-content">
+                <p>
+                  The repository is private while the foundations take shape.
+                  With repository access and Rust installed, build the current
+                  CLI:
+                </p>
+                <pre><code>cargo build --locked --release
+./target/release/svalbard --help
+./target/release/svalbard --version</code></pre>
+                <p class="doc-footnote">
+                  No backup command is available yet. The animation above is a
+                  product preview.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                <span class="doc-index">02</span
+                ><span>Configuration &amp; secrets</span
+                ><span class="doc-status">Planned</span
+                ><span class="expand-icon" aria-hidden="true">+</span>
+              </summary>
+              <div class="doc-content">
+                <p>
+                  One configuration file for the backup job. Environment
+                  variables for credentials. Clear precedence, early validation,
+                  and redacted diagnostics.
+                </p>
+                <p>
+                  The configuration format is still being designed. Examples
+                  will land here with the implementation.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                <span class="doc-index">03</span><span>Database adapters</span
+                ><span class="doc-status">Planned</span
+                ><span class="expand-icon" aria-hidden="true">+</span>
+              </summary>
+              <div class="doc-content">
+                <p>
+                  PostgreSQL and MySQL come first. Each adapter will use the
+                  database’s native dump tools and enforce its own safety
+                  checks.
+                </p>
+                <p>
+                  MySQL support starts with InnoDB. PostgreSQL needs care around
+                  schema changes. Replicas are preferred, and a snapshot must
+                  close before storage transfer starts.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                <span class="doc-index">04</span
+                ><span>Storage destinations</span
+                ><span class="doc-status">Planned</span
+                ><span class="expand-icon" aria-hidden="true">+</span>
+              </summary>
+              <div class="doc-content">
+                <p>
+                  Amazon S3, Cloudflare R2, and SSH destinations through SFTP or
+                  SCP. The adapter boundary keeps destination-specific behavior
+                  out of the backup pipeline.
+                </p>
+                <p>
+                  Incomplete uploads must never be reported as successful
+                  backups.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                <span class="doc-index">05</span
+                ><span>CI &amp; GitHub Actions</span
+                ><span class="doc-status">Planned</span
+                ><span class="expand-icon" aria-hidden="true">+</span>
+              </summary>
+              <div class="doc-content">
+                <p>
+                  Run the CLI directly from a scheduled job, or use a shared,
+                  versioned GitHub Action. Both will use the same configuration
+                  and secret handling.
+                </p>
+                <p>
+                  Expect noninteractive execution, machine-readable output, and
+                  exit codes your pipeline can act on.
+                </p>
+              </div>
+            </details>
+            <details>
+              <summary>
+                <span class="doc-index">06</span
+                ><span>Restore &amp; recovery</span
+                ><span class="doc-status">Up next</span
+                ><span class="expand-icon" aria-hidden="true">+</span>
+              </summary>
+              <div class="doc-content">
+                <p>
+                  A native restore command follows the backup release. Before
+                  that release, real dumps must pass restore tests with the
+                  database’s own tools.
+                </p>
+                <p>A backup only earns its name when the data can come back.</p>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="origin wrap section-space"
+        id="origin"
+        aria-labelledby="origin-title"
+      >
+        <div class="origin-art" aria-hidden="true">
+          <span class="map-coordinate map-top">78.2232° N</span
+          ><span class="map-coordinate map-bottom">15.6469° E</span>
+          <svg viewBox="0 0 460 400">
+            <g fill="none" stroke="currentColor" stroke-width=".8" opacity=".3">
+              <path
+                d="M-20 390C40 300 28 140 155 81S270 68 337 20s90-47 165-8M-20 370C37 282 19 123 147 65S264 48 330 2m-350 350C25 265 8 104 139 48S254 29 317-16M-20 335C13 249 1 85 133 32S246 10 305-34M-20 317C0 234-9 66 126 17S240-12 293-52M-20 407C55 317 38 157 163 98s115-14 180-61 99-41 159-8M-5 416C75 331 50 174 175 115S287 98 355 54s93-36 149-8M14 427C95 348 62 191 187 132S299 116 367 72s91-32 146-8M34 440C115 367 74 210 199 150s114-16 181-60 93-32 145-9M57 449C134 385 88 229 212 169s112-17 181-60 92-30 139-10M81 455C151 405 103 248 226 188s115-16 181-59 91-28 137-10M102 466C172 421 116 268 240 207s112-15 181-58 88-27 133-9M126 479C195 437 132 289 256 228s111-16 179-59 86-25 132-7M148 493C219 454 147 310 272 248s110-15 178-58 84-23 133-6M172 509C242 472 162 334 288 270s112-17 178-59 86-22 130-5"
+              />
+            </g>
+            <path d="M134 247 226 108l59 89 42-63 63 113Z" fill="var(--ink)" />
+            <path
+              d="m194 156 32-48 47 71-48-20-18 28-13-31Zm111 11 22-33 30 50-31-12-13 18-8-23Z"
+              fill="var(--paper)"
+            />
+            <path d="M134 264h256" stroke="var(--accent)" stroke-width="2" />
+            <circle cx="134" cy="264" r="3" fill="var(--accent)" />
+            <circle cx="390" cy="264" r="3" fill="var(--accent)" />
+            <path d="M226 77V59m-9 9h18" stroke="var(--accent)" />
+          </svg>
+          <span class="map-caption">A place for keeping things safe.</span>
+        </div>
+        <div class="origin-copy">
+          <p class="eyebrow">03 / A name with a purpose</p>
+          <h2 id="origin-title">
+            Far north.<br /><span class="serif">Thinking ahead.</span>
+          </h2>
+          <p>
+            Between mainland Norway and the North Pole lies Svalbard: an Arctic
+            archipelago whose name means
+            <a
+              href="https://en.visitsvalbard.com/visitor-information/destinations/longyearbyen"
+              >“the land with the cold shores.”</a
+            >
+          </p>
+          <p>
+            Inside one of its mountains, the
+            <a href="https://www.seedvault.no/about/the-seeds/"
+              >Global Seed Vault</a
+            >
+            keeps backup copies of the world’s crop seeds. A reserve for the
+            days when the original is no longer enough.
+          </p>
+          <p>
+            That’s the idea we’re borrowing. Keep a copy. Keep it somewhere you
+            trust. Make it possible to start again.
+          </p>
+          <p class="origin-aside">
+            The name travels north. Your data goes wherever you choose.
+          </p>
+        </div>
+      </section>
+
+      <section class="closing wrap" aria-label="Project status">
+        <div>
+          <span class="eyebrow">Built in the open. Soon.</span>
+          <p>Small tool. <span class="serif">Long view.</span></p>
+        </div>
+        <a class="text-link" href="#docs"
+          >Follow the foundations <span aria-hidden="true">↑</span></a
+        >
+      </section>
+    </main>
+    <footer class="site-footer wrap">
+      <a class="wordmark footer-wordmark" href="#" aria-label="Svalbard home"
+        ><svg viewBox="0 0 56 36" aria-hidden="true">
+          <path d="M1 33 21 3l12 18 8-12 14 24H1Z" fill="currentColor" /></svg
+        ><span>svalbard.</span></a
+      ><span>Open source. MIT licensed. Yours to run.</span
+      ><span class="footer-location"
+        >Made for a little peace of mind.
+        <span aria-hidden="true">↟</span></span
+      >
+    </footer>
+  </body>
+</html>
