@@ -23,7 +23,7 @@ function updateDaylight() {
   document.querySelector("#arctic-clock").textContent =
     `${clock.format(now)} in Longyearbyen`;
   document.querySelector("#arctic-phase").textContent =
-    `${sun.phase} · ${appearance === "auto" ? "Following the Arctic sun" : `${appearance === "light" ? "Day" : "Night"} preview`}`;
+    `${sun.phase} · ${appearance === "auto" ? "Auto" : `${appearance === "light" ? "Day" : "Night"} preview`}`;
 }
 
 document.querySelector(".theme-control").disabled = false;
@@ -48,14 +48,11 @@ const output = document.querySelector("#terminal-lines");
 const playButton = document.querySelector("#play-demo");
 const playLabel = document.querySelector("#play-label");
 const playIcon = document.querySelector("#play-icon");
-const playbackState = document.querySelector("#playback-state");
-const playbackLight = document.querySelector("#playback-light");
 const announcement = document.querySelector("#demo-announcement");
 const progressFill = document.querySelector("#progress-fill");
 const progressNumber = document.querySelector("#progress-number");
 const caption = document.querySelector("#terminal-caption");
 const journeySteps = [...document.querySelectorAll(".journey-step")];
-const journeyTracks = [...document.querySelectorAll(".journey-track")];
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const duration = 13000;
 let elapsed = 0;
@@ -102,7 +99,7 @@ function stages() {
     {
       at: duration,
       text: "Backup stored · local staging cleared",
-      caption: "Preview complete. Your data, your storage.",
+      caption: "Example complete.",
       step: 3,
     },
   ];
@@ -111,22 +108,13 @@ function stages() {
 function updateTransport() {
   const complete = elapsed >= duration;
   playLabel.textContent = playing
-    ? "Pause preview"
+    ? "Pause"
     : complete
-      ? "Run again"
+      ? "Replay"
       : elapsed > 0
-        ? "Resume preview"
-        : "Run the preview";
+        ? "Resume"
+        : "Run example";
   playIcon.textContent = playing ? "Ⅱ" : complete ? "↻" : "▶";
-  playbackState.textContent = playing
-    ? "Running preview"
-    : complete
-      ? "Complete"
-      : elapsed > 0
-        ? "Paused"
-        : "Ready";
-  playbackLight.classList.toggle("playing", playing);
-  journeyTracks.forEach((track) => track.classList.toggle("paused", !playing));
 }
 
 function render() {
@@ -168,12 +156,6 @@ function render() {
     node.classList.toggle("active", index === stage.step);
     node.classList.toggle("complete", index < stage.step);
   });
-  journeyTracks.forEach((track, index) =>
-    track.classList.toggle(
-      "moving",
-      index === 0 ? currentStage === 1 : currentStage === 3,
-    ),
-  );
 }
 
 function tick(now) {
@@ -202,13 +184,12 @@ function reset() {
   output.replaceChildren();
   const line = document.createElement("p");
   line.className = "terminal-line";
-  line.textContent = "Ready when you are.";
+  line.textContent = "Waiting to start.";
   output.append(line);
   progressFill.style.width = "0%";
   progressNumber.textContent = "0%";
-  caption.textContent = "An example, not a live backup.";
+  caption.textContent = "Select a database and destination.";
   journeySteps.forEach((step) => step.classList.remove("active", "complete"));
-  journeyTracks.forEach((track) => track.classList.remove("moving"));
   announcement.textContent =
     "Preview ready. Run it with the selected database and destination.";
   updateTransport();
@@ -230,16 +211,6 @@ playButton.addEventListener("click", () => {
   if (elapsed >= duration) reset();
   setPlaying(!playing);
 });
-document
-  .querySelector('.hero-actions a[href="#demo"]')
-  .addEventListener("click", () => {
-    if (reducedMotion.matches) {
-      finishWithoutAnimation();
-      return;
-    }
-    if (elapsed >= duration) reset();
-    setPlaying(true);
-  });
 database.addEventListener("change", reset);
 destination.addEventListener("change", reset);
 document.addEventListener("visibilitychange", () => {
