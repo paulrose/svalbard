@@ -1,0 +1,29 @@
+# Svalbard configuration example.
+#
+# This file holds no secrets. Set the database password in SVALBARD_SOURCE_PASSWORD,
+# or point source.password_file at a mounted secret file.
+# S3 uses the AWS credential chain, for example AWS_ACCESS_KEY_ID or a web identity token.
+#
+# Validate it with: svalbard config check --config examples/svalbard.toml
+
+[source]
+type = "postgresql"
+host = "db.example.com"
+port = 5432
+database = "app"
+user = "backup"
+# password_file = "/run/secrets/db-password"
+
+[destination]
+type = "s3"
+bucket = "example-backups"
+prefix = "app/"
+region = "eu-west-1"
+
+# Defaults. See docs/database-safety.md.
+[safety]
+lock_timeout = "10s"
+contention_timeout = "2s"
+dump_timeout = "1h"
+max_dump_size = "20GiB"
+min_free_space = "2GiB"

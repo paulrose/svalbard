@@ -39,7 +39,7 @@ fn invalid_arguments_fail_with_a_diagnostic() {
         vec![],
         vec!["--unknown"],
         vec!["backup"],
-        vec!["--version", "--unknown"],
+        vec!["config", "check", "--unknown"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_svalbard"))
             .args(&args)
