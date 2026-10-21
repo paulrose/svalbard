@@ -24,20 +24,19 @@ A failed run never reports success. Svalbard never uploads a staged file from a 
 
 ## Supported versions
 
-| Source | Servers | Client | Notes |
-| --- | --- | --- | --- |
-| PostgreSQL | 15, 16, 17, 18 | `pg_dump` 15 to 18, of the same major version as the server or newer | Support for PostgreSQL 14 ends on 2026-11-12. PostgreSQL 19 follows its release (planned for 2026-11-19) and a passing test matrix. |
-| MySQL | 8.4 LTS, 9.7 LTS | `mysqldump` of the same LTS series as the server | Support for MySQL 8.0 ended in April 2026. Innovation releases, such as 26.10, are not supported. |
+| Source | Servers | Client |
+| --- | --- | --- |
+| PostgreSQL | 15, 16, 17, 18 | `pg_dump` 15 to 18, of the same major version as the server or newer |
+| MySQL | 8.4 LTS, 9.7 LTS | `mysqldump` of the same LTS series as the server |
 
 `pg_dump` refuses to dump a server that is newer than its own major version.
 An archive from `pg_dump` 17 or newer has archive format 1.16, which `pg_restore` 16 and older cannot read.
 Restore an archive with a `pg_restore` of the same major version as the `pg_dump` that wrote it, or newer.
 
 The MySQL manual gives no compatibility matrix for clients and servers of different series, so Svalbard requires the same series.
-`mysqldump` 8.0 does not have `--init-command`, which Svalbard needs for the lock wait limit.
 Use the newest patch release. `mysqldump` 8.4.13 and 9.7.4 correct faults with malicious server metadata.
 
-MariaDB is not supported. Svalbard rejects other servers and clients before the dump starts, and it records the client and server versions in the artifact metadata.
+Before the dump starts, Svalbard checks the client and server versions against this table. It records both versions in the artifact metadata.
 
 ## Where to run the dump
 
@@ -94,9 +93,6 @@ The failure names are error kinds for the JSON result. The CLI issues assign the
 
 The upload has separate deadlines, which the storage adapters define ([#11](https://github.com/paulrose/svalbard/issues/11)).
 The dump deadline limits only the time that the snapshot stays open.
-
-A parallel dump uses more connections and more server load.
-Svalbard can add a worker setting after experiments measure that load.
 
 ## Run sequence
 
@@ -237,7 +233,7 @@ Svalbard never passes these options:
 | `--serializable-deferrable` | The start of the dump can wait for an indeterminate time. It fails on a standby. |
 | `--enable-row-security` | It dumps only the rows that the role can see. That is a partial backup. |
 | `--role` | Cancellation matches sessions by their login role. |
-| Table, schema and data filters | The first release dumps the whole database. |
+| Table, schema and data filters | A filtered dump is a partial backup. |
 
 Svalbard sets the session label through `PGAPPNAME`, for example `svalbard-<run id>`.
 The value has less than 64 ASCII characters and contains no secrets, because all users can see it.
@@ -277,16 +273,15 @@ Without `client_connection_check_interval`, a backend that waits for a lock dete
 ### Privileges
 
 - The dump needs read access to every object that it dumps. The predefined role `pg_read_all_data` gives `SELECT` on tables and sequences and `USAGE` on schemas.
-- `pg_read_all_data` does not include large objects before PostgreSQL 19. A database with large objects needs the privileges on them.
+- `pg_read_all_data` does not include large objects. A database with large objects needs the privileges on them.
 - `pg_read_all_data` does not bypass row-level security. If a table has policies, the role needs `BYPASSRLS`, or `pg_dump` fails.
 - Detection and cancellation need no additional privileges.
 
 ### Scope
 
 `pg_dump` dumps one database.
-It does not dump roles, tablespaces or other global objects. `pg_dumpall --globals-only` dumps them, usually as a superuser.
+It does not dump roles, tablespaces or other global objects.
 The roles that own objects or have grants in the dump must exist before a restore.
-Svalbard does not back up global objects in the first release.
 
 ## MySQL rules
 
@@ -351,7 +346,6 @@ Svalbard never passes these options:
 `FLUSH TABLES WITH READ LOCK` is short, but it waits for running statements. While it waits, it blocks new writes on the whole server.
 
 With `--set-gtid-purged=OFF`, the dump does not contain the GTID set. A restore creates new GTIDs.
-A Svalbard backup cannot seed a replica that uses GTID auto-positioning.
 
 ### Contention detection
 
@@ -508,12 +502,6 @@ The adapter issues run the scenarios for their source. [#15](https://github.com/
 | S11 | Other sessions of the same database user, including another Svalbard run | Svalbard never ends them. |
 | S12 | A PostgreSQL replay conflict, with the default delay and with `-1`. A replicated `ALTER TABLE` on MySQL. | The backup fails or is cancelled. Record the replication lag. |
 | S13 | The control connection fails during the dump | `detection_lost`. B6 met. |
-
-## Open questions
-
-1. Are the defaults acceptable: 10 s, 2 s, 1 h, 20 GiB and 2 GiB?
-2. Is it acceptable that a MySQL backup cannot seed a replica with GTID auto-positioning?
-3. Does the first release need global objects, such as PostgreSQL roles and MySQL accounts?
 
 ## References
 
