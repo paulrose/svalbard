@@ -9,7 +9,7 @@ use rustls::{
 use tokio_postgres::{NoTls, config::SslMode};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-use super::{Client, Error, Failure, Observation, Source, Wait};
+use super::{Client, Error, Failure, Observation, Source, Wait, listing};
 use crate::config::{self, Safety, Tls};
 
 /// The supported major versions of `pg_dump` and of the server.
@@ -188,13 +188,10 @@ impl Source for Postgres {
             .map(|row| row.get(0))
             .collect();
         if !denied.is_empty() {
-            let mut objects = denied[..denied.len().min(5)].join(", ");
-            if denied.len() > 5 {
-                objects += &format!(" and {} more", denied.len() - 5);
-            }
             return Err(format!(
-                "the role {} cannot read {objects}. It needs pg_read_all_data, and BYPASSRLS for tables with row-level security.",
-                self.source.user
+                "the role {} cannot read {}. It needs pg_read_all_data, and BYPASSRLS for tables with row-level security.",
+                self.source.user,
+                listing(&denied)
             ));
         }
 

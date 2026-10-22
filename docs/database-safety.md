@@ -322,8 +322,15 @@ Concurrent schema changes are not supported. Svalbard cannot prevent them, but i
 - A statement that waits for a metadata lock of the dump is contention. The watchdog cancels the backup.
 - Svalbard records the table and column definitions before the client starts and after it exits. If they differ, the run fails with `schema_changed`.
 
-The definitions come from `information_schema.TABLES` and `information_schema.COLUMNS`, with `information_schema_stats_expiry = 0` for the control session.
-Experiment: confirm which forms of these statements the definition check detects.
+The definitions come from `information_schema.TABLES` (name, type, engine and creation time) and `information_schema.COLUMNS`, with `information_schema_stats_expiry = 0` for the control session.
+Writes do not change these columns.
+
+The tests show these results for a table that `mysqldump` has not read yet:
+
+| Statement | Result |
+| --- | --- |
+| `CREATE TABLE` | The dump does not contain the new table. The definition check fails the run with `schema_changed`. |
+| `ALTER TABLE`, `TRUNCATE TABLE`, `RENAME TABLE` | `mysqldump` stops with an error. The run fails with `client`. |
 
 ### Arguments
 
@@ -331,7 +338,7 @@ Svalbard passes these options:
 
 | Option | Reason |
 | --- | --- |
-| `--defaults-file=<private file>` | It is the first argument and contains the credentials. Option files such as `/etc/my.cnf` cannot add options. |
+| `--defaults-file=<private file>` | It is the first argument. It holds the host, port, user, password, `protocol=TCP` and the TLS settings. Option files such as `/etc/my.cnf` cannot add options. |
 | `--single-transaction` | InnoDB snapshot. It also turns off `--lock-tables`. |
 | `--skip-lock-tables` | Makes the absence of `LOCK TABLES` explicit. |
 | `--quick` | Streams rows. Without it, `mysqldump` keeps each table in client memory. |
@@ -339,6 +346,16 @@ Svalbard passes these options:
 | `--no-tablespaces` | Removes the need for the `PROCESS` privilege. |
 | `--init-command="SET SESSION lock_wait_timeout = <lock_timeout + 10 s>, @svalbard_run = '<run id>'"` | Limits each metadata lock wait of the dump on the server, in whole seconds. The watchdog ends the wait first, after `lock_timeout`. Labels the session for detection and cancellation. |
 | `--routines`, `--events` | Includes stored routines and events. Triggers are included by default. |
+| `--` before the database name | A database name that starts with `-` stays a name. |
+
+`protocol=TCP` makes `localhost` a TCP host, as for the control connection, and not the Unix socket.
+The child environment has no `HOME` or `MYSQL_TEST_LOGIN_FILE`, so `mysqldump` reads no login path file.
+`mysqldump` writes binary values as `_binary` strings, which restore unchanged, so Svalbard does not pass `--hex-blob`.
+
+With `source.tls = "verify-full"`, the option file sets `ssl-mode=VERIFY_IDENTITY` and `ssl-ca`.
+`mysqldump` needs a CA file in this mode. Without `source.tls_ca_file`, Svalbard uses the CA bundle file of the system OpenSSL, and the control connection trusts the same file.
+With `source.tls = "disable"`, the option file sets `get-server-public-key=ON`, because `caching_sha2_password` needs the server key to send the password without TLS.
+A man-in-the-middle can then capture the password.
 
 Svalbard never passes these options:
 
@@ -360,11 +377,15 @@ With `--set-gtid-purged=OFF`, the dump does not contain the GTID set. A restore 
 
 ### Contention detection
 
-Detection needs these conditions. The preflight checks them:
+Detection needs these conditions:
 
 - `performance_schema` is on.
 - The consumer `global_instrumentation` and the instrument `wait/lock/metadata/sql/mdl` are enabled. Both are enabled by default.
-- The account has `SELECT` on `performance_schema.metadata_locks`, `threads`, `user_variables_by_thread`, `setup_consumers` and `setup_instruments`.
+- The account has `SELECT` on `performance_schema.metadata_locks`, `threads` and `user_variables_by_thread`.
+
+Each detection query first checks that the control session sees its own metadata lock in `metadata_locks`.
+This check fails if any condition is missing, also when an operator changes the instrumentation during the dump.
+Before the dump, the failure is `detection_unavailable`. During the dump, it is `detection_lost`.
 
 `mysqldump` has no option for a session label. The `--init-command` sets the user variable `@svalbard_run` in the dump session instead.
 `user_variables_by_thread` shows the variables of all sessions, so the control connection finds the backup session:
@@ -373,8 +394,11 @@ Detection needs these conditions. The preflight checks them:
 SELECT t.THREAD_ID, t.PROCESSLIST_ID
 FROM performance_schema.user_variables_by_thread AS v
 JOIN performance_schema.threads AS t USING (THREAD_ID)
-WHERE v.VARIABLE_NAME = 'svalbard_run' AND v.VARIABLE_VALUE = ?;
+WHERE v.VARIABLE_NAME = 'svalbard_run' AND v.VARIABLE_VALUE = ?
+  AND t.PROCESSLIST_USER = SUBSTRING_INDEX(USER(), '@', 1);
 ```
+
+The user filter keeps Svalbard from ending a session of another account that sets the same variable.
 
 The client process ID in the connection attributes is not unique. Two containers on one host can use the same process ID.
 
@@ -395,9 +419,14 @@ WHERE h.OWNER_THREAD_ID = ? AND h.LOCK_STATUS = 'GRANTED'
 The query counts every pending request on a locked object, also when another session blocks it too. A false match cancels only the backup.
 The pending requests of the backup session itself are its lock waits.
 
+`FLUSH TABLES` and `FLUSH TABLES WITH READ LOCK` wait for every table that a statement uses, also for the table that the dump reads.
+`FLUSH TABLES WITH READ LOCK` blocks writes on the whole server while it waits.
+No metadata lock shows this wait, so the watchdog also counts each session in the state `Waiting for table flush` as contention.
+
 ### Cancellation
 
 Svalbard runs `KILL CONNECTION <processlist id>` for the backup session. An account can kill its own connections without `CONNECTION_ADMIN`.
+A connection that ended before the `KILL` counts as ended.
 
 If only the client stops, a server thread that waits for a metadata lock continues to wait.
 It stops when it gets the lock, when `lock_wait_timeout` expires, or after `KILL`.
@@ -405,10 +434,15 @@ It stops when it gets the lock, when `lock_wait_timeout` expires, or after `KILL
 
 ### Privileges
 
-- The dump needs `SELECT`, `SHOW VIEW` and `TRIGGER` on the database, and `EVENT` for events.
-- Routines need global `SELECT` or `SHOW_ROUTINE` (Experiment: confirm that `SHOW_ROUTINE` is sufficient).
+- The dump needs `SELECT`, `SHOW VIEW`, `TRIGGER` and `EVENT` on the whole database, as a database or global grant.
+- Routines need global `SHOW_ROUTINE` or global `SELECT`. The restore tests show that `SHOW_ROUTINE` is sufficient.
 - With the arguments above, the dump needs no `LOCK TABLES`, `RELOAD`, `FLUSH_TABLES`, `PROCESS` or replication privileges.
-- Detection needs `SELECT` on the five `performance_schema` tables. Cancellation needs no additional privileges.
+- Detection needs `SELECT` on the three `performance_schema` tables. Cancellation needs no additional privileges.
+
+`mysqldump` silently leaves out the tables, triggers and routines that the account cannot see. The dump then succeeds, but it is partial.
+The preflight therefore reads `SHOW GRANTS` for the account and its active roles, and requires these privileges on the database or globally.
+Table-level grants and grants on database patterns do not count, and a partial revoke on the database removes a global privilege.
+The error names the missing privileges.
 
 Use a dedicated backup account without `LOCK TABLES`, `RELOAD`, `FLUSH_TABLES` and `CONNECTION_ADMIN`.
 Then the account cannot take global or table locks, even if an argument is wrong.
@@ -461,8 +495,6 @@ The accounts in `DEFINER` clauses must exist before a restore.
 - Detection sees PostgreSQL WAL replay and the MySQL replication applier.
 - `client_connection_check_interval` ends a PostgreSQL session that waits for a lock.
 - A PostgreSQL schema change before the table locks, or on an object without a lock, makes `pg_dump` fail.
-- The MySQL definition check detects each form of the unsupported schema changes.
-- `SHOW_ROUTINE` is sufficient for MySQL routines.
 
 ## Measurement plan
 
@@ -502,7 +534,7 @@ The adapter issues run the scenarios for their source. [#15](https://github.com/
 | --- | --- | --- |
 | S1 | Dump under concurrent reads and writes, on a primary and on a replica | Success. B1, B2, B3, B7 and B8 met. A native restore matches the fixture data. |
 | S2 | `ALTER TABLE` on a table that the dump locks | `contention`. B4 met. No success record. |
-| S3 | `ALTER TABLE`, `TRUNCATE TABLE` and `RENAME TABLE` on a MySQL table that the dump did not read yet | `schema_changed`. |
+| S3 | `CREATE TABLE`, `ALTER TABLE`, `TRUNCATE TABLE` and `RENAME TABLE` on a MySQL table that the dump did not read yet | The run fails: `schema_changed` for `CREATE TABLE`, `client` for the others. |
 | S4 | The backup starts while a schema change holds an exclusive lock | `lock_timeout`. The backup does not block application traffic. |
 | S5 | A dump that takes longer than `dump_timeout` | `dump_timeout`. B5 and B6 met. |
 | S6 | A staging filesystem that is too small | `staging_limit`. B6 met. |

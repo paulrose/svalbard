@@ -22,6 +22,8 @@ struct Fake {
     detection: Detection,
     /// The backup sessions survive `terminate`.
     stuck: bool,
+    /// The failure that `verify` reports.
+    verify: Option<Failure>,
     started: Cell<bool>,
     terminated: bool,
 }
@@ -32,6 +34,7 @@ impl Fake {
             script,
             detection,
             stuck: false,
+            verify: None,
             started: Cell::new(false),
             terminated: false,
         }
@@ -71,6 +74,16 @@ impl Source for Fake {
     async fn terminate(&mut self, _run_id: &str) -> Result<(), String> {
         self.terminated = true;
         Ok(())
+    }
+
+    async fn verify(&mut self) -> Result<(), Error> {
+        match self.verify {
+            Some(kind) => Err(Error {
+                kind,
+                message: "table app.users changed".to_owned(),
+            }),
+            None => Ok(()),
+        }
     }
 }
 
@@ -263,6 +276,16 @@ async fn watchdog_stops_the_backup() {
         assert!(fake.terminated, "{error}");
         assert!(elapsed < Duration::from_secs(8), "{error}: {elapsed:?}");
     }
+}
+
+#[tokio::test]
+async fn failed_source_check_deletes_the_dump() {
+    let mut fake = Fake::new("printf dump", Box::new(|| Ok(Observation::default())));
+    fake.verify = Some(Failure::SchemaChanged);
+    let (error, _) = failure(&mut fake, &safety(), future::pending()).await;
+
+    assert_eq!(error.kind, Failure::SchemaChanged, "{error}");
+    assert!(error.message.contains("app.users"), "{error}");
 }
 
 #[tokio::test]

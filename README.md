@@ -1,7 +1,7 @@
 # Svalbard
 
 Svalbard is an open-source Rust CLI for database backups.
-This version validates the configuration for a PostgreSQL backup to Amazon S3.
+This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3.
 
 ## Build and run
 
@@ -37,9 +37,9 @@ Unknown keys, empty values and invalid values are errors.
 
 | Key | Default | Values |
 | --- | --- | --- |
-| `source.type` | Required | `postgresql` |
+| `source.type` | Required | `postgresql` or `mysql` |
 | `source.host` | Required | Host name |
-| `source.port` | `5432` | `1` to `65535` |
+| `source.port` | `5432` for PostgreSQL, `3306` for MySQL | `1` to `65535` |
 | `source.database` | Required | Database name |
 | `source.user` | Required | User name |
 | `source.password_file` | None | Path to a file that holds the password |
@@ -56,7 +56,7 @@ Unknown keys, empty values and invalid values are errors.
 | `safety.min_free_space` | `2GiB` | `0B` to `1TiB` |
 
 With `verify-full`, the database connections require TLS, and Svalbard checks the server certificate and host name.
-Without `source.tls_ca_file`, Svalbard uses the system trust store, and `pg_dump` needs libpq 16 or newer.
+Without `source.tls_ca_file`, Svalbard uses the system trust store. Then `pg_dump` needs libpq 16 or newer, and MySQL uses the CA bundle file of the system OpenSSL.
 
 A duration is a whole number with `s`, `min` or `h`. A size is a whole number with `B`, `KiB`, `MiB`, `GiB` or `TiB`.
 The [database safety contract](docs/database-safety.md) explains the safety limits.
@@ -105,17 +105,17 @@ cargo test --locked
 The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for each pull request and each push to `main`.
 It uses the toolchain in `rust-toolchain.toml`. It needs no credentials or paid services.
 
-The PostgreSQL tests need Docker, OpenSSL, and `pg_dump` and `pg_restore` of the server's major version.
-[`scripts/test-postgresql.sh`](scripts/test-postgresql.sh) starts a disposable server with TLS and prints the test environment.
-The second argument is the host port, which is 5432 by default. The server listens on `127.0.0.1` only.
+The PostgreSQL and MySQL tests run in Docker, which is their only requirement.
+[`scripts/test-databases.sh`](scripts/test-databases.sh) starts both servers with TLS on a private network, and a runner container that installs Rust and the native clients.
+The arguments are the PostgreSQL version and the MySQL series. The defaults are 18 and 8.4.
+The script writes nothing to the host. At the end, it removes the containers, the volumes and the images that it pulled.
 
 ```sh
-export $(scripts/test-postgresql.sh 18 55432)
-cargo test --locked --test postgresql -- --ignored
-docker stop svalbard-postgresql-18
+scripts/test-databases.sh
+scripts/test-databases.sh 15 9.7
 ```
 
-CI runs these tests against PostgreSQL 15, 16, 17 and 18.
+CI runs these tests against PostgreSQL 15, 16, 17 and 18, and MySQL 8.4 and 9.7.
 
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 
