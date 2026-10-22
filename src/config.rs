@@ -1,4 +1,5 @@
 use std::{
+    env,
     ffi::OsStr,
     fs::{self, File},
     path::{Path, PathBuf},
@@ -35,6 +36,7 @@ pub struct Source {
     pub database: String,
     pub user: String,
     pub password: Password,
+    pub tls: Tls,
 }
 
 /// Where the source password comes from. Validation never reads the password.
@@ -43,6 +45,38 @@ pub enum Password {
     None,
     Env,
     File(PathBuf),
+}
+
+impl Password {
+    /// Reads the password. A line break at the end of the file is not part of it.
+    pub fn read(&self) -> Result<Option<String>, String> {
+        match self {
+            Password::None => Ok(None),
+            // The error omits the value, which can hold the secret.
+            Password::Env => env::var(PASSWORD_ENV)
+                .map(Some)
+                .map_err(|_| format!("{PASSWORD_ENV} is not set or is not valid UTF-8.")),
+            Password::File(path) => {
+                let text = fs::read_to_string(path).map_err(|error| {
+                    format!(
+                        "cannot read source.password_file {}: {error}",
+                        path.display()
+                    )
+                })?;
+                let line = text.strip_suffix('\n').unwrap_or(&text);
+                Ok(Some(line.strip_suffix('\r').unwrap_or(line).to_owned()))
+            }
+        }
+    }
+}
+
+/// TLS for the database connections.
+#[derive(Debug)]
+pub enum Tls {
+    /// Requires TLS, and verifies the server certificate and host name against the CA file,
+    /// or against the system trust store if there is no file.
+    VerifyFull(Option<PathBuf>),
+    Disable,
 }
 
 #[derive(Debug)]
@@ -115,6 +149,14 @@ pub struct SourceSettings {
         value_name = "PATH"
     )]
     pub password_file: Option<PathBuf>,
+    #[arg(long = "source-tls", env = "SVALBARD_SOURCE_TLS", value_name = "MODE")]
+    pub tls: Option<String>,
+    #[arg(
+        long = "source-tls-ca-file",
+        env = "SVALBARD_SOURCE_TLS_CA_FILE",
+        value_name = "PATH"
+    )]
+    pub tls_ca_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Default, Deserialize)]
@@ -228,6 +270,13 @@ pub fn load(
                     .as_deref()
                     .or(file_source.password_file.as_deref()),
             )?,
+            tls: tls(
+                optional("source.tls", pick(&source.tls, &file_source.tls))?.as_deref(),
+                source
+                    .tls_ca_file
+                    .as_deref()
+                    .or(file_source.tls_ca_file.as_deref()),
+            )?,
         },
         destination: Destination {
             bucket: required(
@@ -336,18 +385,37 @@ fn password(env: Option<&OsStr>, file: Option<&Path>) -> Result<Password, String
         )),
         (Some(value), None) if value.is_empty() => Err(format!("{PASSWORD_ENV} is empty.")),
         (Some(_), None) => Ok(Password::Env),
-        (None, Some(path)) => match File::open(path).and_then(|file| file.metadata()) {
-            Ok(metadata) if metadata.is_file() => Ok(Password::File(path.to_owned())),
-            Ok(_) => Err(format!(
-                "source.password_file {} is not a file.",
-                path.display()
-            )),
-            Err(error) => Err(format!(
-                "source.password_file {} cannot be opened: {error}",
-                path.display()
-            )),
-        },
+        (None, Some(path)) => existing_file("source.password_file", path).map(Password::File),
         (None, None) => Ok(Password::None),
+    }
+}
+
+fn tls(mode: Option<&str>, ca_file: Option<&Path>) -> Result<Tls, String> {
+    match (mode.unwrap_or("verify-full"), ca_file) {
+        ("verify-full", None) => Ok(Tls::VerifyFull(None)),
+        ("verify-full", Some(path)) => Ok(Tls::VerifyFull(Some(existing_file(
+            "source.tls_ca_file",
+            path,
+        )?))),
+        ("disable", None) => Ok(Tls::Disable),
+        ("disable", Some(_)) => {
+            Err("source.tls_ca_file needs source.tls `verify-full`.".to_owned())
+        }
+        (mode, _) => Err(format!(
+            "source.tls is `{mode}`. Use `verify-full` or `disable`."
+        )),
+    }
+}
+
+/// Checks that `path` opens and is a file, without reading it.
+fn existing_file(key: &str, path: &Path) -> Result<PathBuf, String> {
+    match File::open(path).and_then(|file| file.metadata()) {
+        Ok(metadata) if metadata.is_file() => Ok(path.to_owned()),
+        Ok(_) => Err(format!("{key} {} is not a file.", path.display())),
+        Err(error) => Err(format!(
+            "{key} {} cannot be opened: {error}",
+            path.display()
+        )),
     }
 }
 

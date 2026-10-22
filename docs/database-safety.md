@@ -32,6 +32,8 @@ A failed run never reports success. Svalbard never uploads a staged file from a 
 `pg_dump` refuses to dump a server that is newer than its own major version.
 An archive from `pg_dump` 17 or newer has archive format 1.16, which `pg_restore` 16 and older cannot read.
 Restore an archive with a `pg_restore` of the same major version as the `pg_dump` that wrote it, or newer.
+`pg_restore` 17 and newer send `SET transaction_timeout = 0`, which servers 15 and 16 reject. `pg_restore` reports this error, continues, and exits with status 1.
+For a clean restore into servers 15 and 16, dump them with `pg_dump` of the same major version.
 
 The MySQL manual gives no compatibility matrix for clients and servers of different series, so Svalbard requires the same series.
 Use the newest patch release. `mysqldump` 8.4.13 and 9.7.4 correct faults with malicious server metadata.
@@ -214,9 +216,10 @@ A schema change before the table locks, or on an object without a lock, can make
 Server, role and `PGOPTIONS` values for these settings have no effect on the dump.
 Svalbard enforces all deadlines from outside.
 
-Svalbard passes `--lock-wait-timeout=<lock_timeout>`.
+Svalbard passes `--lock-wait-timeout=<lock_timeout + 10 s>`.
 `pg_dump` applies this value as `statement_timeout` to each `LOCK TABLE` batch, at the start of the dump only.
-The watchdog limits all other lock waits.
+The watchdog ends every lock wait after `lock_timeout`, before this timeout, so the run fails with `lock_timeout`.
+The `pg_dump` timeout ends the wait if Svalbard stops without cleanup.
 
 `pg_dump` does not reset `client_connection_check_interval`.
 If the server accepts the setting, Svalbard sets it to 10 s through `PGOPTIONS`.
@@ -224,6 +227,10 @@ Then the server ends the session within 10 s after the client disconnects (Exper
 The setting needs a Linux, macOS, illumos or BSD server.
 
 ### Arguments
+
+Svalbard passes `--format=custom`, `--no-password` and `--lock-wait-timeout`.
+The connection settings go through `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSSLMODE` and `PGSSLROOTCERT`, and the password through `PGPASSFILE`.
+`PGGSSENCMODE=disable` makes `pg_dump` use TLS as configured, because libpq prefers GSS encryption to TLS.
 
 Svalbard never passes these options:
 
@@ -277,6 +284,10 @@ Without `client_connection_check_interval`, a backend that waits for a lock dete
 - `pg_read_all_data` does not bypass row-level security. If a table has policies, the role needs `BYPASSRLS`, or `pg_dump` fails.
 - Detection and cancellation need no additional privileges.
 
+The preflight lists the tables and sequences that the role cannot read, and the tables with row-level security that applies to the role.
+It includes the configuration tables of extensions, because `pg_dump` dumps their data.
+It does not check large objects.
+
 ### Scope
 
 `pg_dump` dumps one database.
@@ -326,7 +337,7 @@ Svalbard passes these options:
 | `--quick` | Streams rows. Without it, `mysqldump` keeps each table in client memory. |
 | `--set-gtid-purged=OFF` | Prevents `FLUSH TABLES WITH READ LOCK` on servers that use GTIDs. |
 | `--no-tablespaces` | Removes the need for the `PROCESS` privilege. |
-| `--init-command="SET SESSION lock_wait_timeout = <lock_timeout>, @svalbard_run = '<run id>'"` | Limits each metadata lock wait of the dump on the server, in whole seconds. Labels the session for detection and cancellation. |
+| `--init-command="SET SESSION lock_wait_timeout = <lock_timeout + 10 s>, @svalbard_run = '<run id>'"` | Limits each metadata lock wait of the dump on the server, in whole seconds. The watchdog ends the wait first, after `lock_timeout`. Labels the session for detection and cancellation. |
 | `--routines`, `--events` | Includes stored routines and events. Triggers are included by default. |
 
 Svalbard never passes these options:
@@ -390,7 +401,7 @@ Svalbard runs `KILL CONNECTION <processlist id>` for the backup session. An acco
 
 If only the client stops, a server thread that waits for a metadata lock continues to wait.
 It stops when it gets the lock, when `lock_wait_timeout` expires, or after `KILL`.
-`lock_wait_timeout` from `--init-command` limits this wait to `lock_timeout` when Svalbard cannot run `KILL`.
+`lock_wait_timeout` from `--init-command` limits this wait to `lock_timeout` + 10 s when Svalbard cannot run `KILL`.
 
 ### Privileges
 

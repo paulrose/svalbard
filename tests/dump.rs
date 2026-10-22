@@ -47,7 +47,7 @@ impl Source for Fake {
         Ok("test 1.0".to_owned())
     }
 
-    fn client(&self, _run_id: &str, credentials: &Path) -> Client {
+    fn client(&self, _run_id: &str, credentials: &Path, _safety: &Safety) -> Client {
         self.started.set(true);
         Client {
             args: vec![

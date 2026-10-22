@@ -227,3 +227,37 @@ fn secrets_stay_out_of_output() {
         assert!(!stderr.contains(SECRET), "{args:?}: {stderr}");
     }
 }
+
+#[test]
+fn tls_settings_are_checked() {
+    let file = config_file("tls", BASE);
+    let ca_file = config_file("tls-ca", "not read by the check");
+
+    for (args, error) in [
+        (vec!["--source-tls", "verify-full"], None),
+        (vec!["--source-tls", "disable"], None),
+        (vec!["--source-tls-ca-file", &ca_file], None),
+        (
+            vec!["--source-tls", "require"],
+            Some("Use `verify-full` or `disable`"),
+        ),
+        (
+            vec!["--source-tls-ca-file", "missing-ca"],
+            Some("source.tls_ca_file missing-ca cannot be opened"),
+        ),
+        (
+            vec!["--source-tls", "disable", "--source-tls-ca-file", &ca_file],
+            Some("needs source.tls `verify-full`"),
+        ),
+    ] {
+        let (code, _, stderr) = check(&[&["--config", file.as_str()], &args[..]].concat(), &[]);
+
+        match error {
+            None => assert_eq!(code, Some(0), "{args:?}: {stderr}"),
+            Some(error) => {
+                assert_eq!(code, Some(3), "{args:?}");
+                assert!(stderr.contains(error), "{args:?}: {stderr}");
+            }
+        }
+    }
+}

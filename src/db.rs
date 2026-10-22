@@ -5,12 +5,16 @@
 //! the watchdog, cancellation and the closure check.
 
 mod dump;
+mod postgresql;
 
 use std::{ffi::OsString, fmt, path::Path, path::PathBuf};
 
 use serde::Serialize;
 
+use crate::config::Safety;
+
 pub use dump::dump;
+pub use postgresql::Postgres;
 
 /// The source-specific steps of a dump. [`dump`] runs them in the order of the safety contract.
 ///
@@ -30,7 +34,7 @@ pub trait Source {
     async fn preflight(&mut self, client_version: &str) -> Result<String, String>;
 
     /// The client command for this run. [`dump`] writes [`Client::credentials`] to `credentials`.
-    fn client(&self, run_id: &str, credentials: &Path) -> Client;
+    fn client(&self, run_id: &str, credentials: &Path, safety: &Safety) -> Client;
 
     /// The backup sessions of this run, and the lock waits that involve them.
     async fn observe(&mut self, run_id: &str) -> Result<Observation, String>;

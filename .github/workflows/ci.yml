@@ -21,3 +21,27 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+
+  postgresql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [15, 16, 17, 18]
+    env:
+      VERSION: ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      # pg_dump and pg_restore of the server's major version, from the PostgreSQL apt repository.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install --yes --no-install-recommends "postgresql-client-$VERSION"
+          echo "/usr/lib/postgresql/$VERSION/bin" >> "$GITHUB_PATH"
+      - run: scripts/test-postgresql.sh "$VERSION" >> "$GITHUB_ENV"
+      - run: cargo test --locked --test postgresql -- --ignored

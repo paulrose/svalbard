@@ -92,7 +92,7 @@ async fn dump_to<S: Source>(
         () = cancel.as_mut() => return Err(cancelled()),
     };
 
-    let client = source.client(&run.id, credentials);
+    let client = source.client(&run.id, credentials, safety);
     if let Some(contents) = &client.credentials {
         staging::create_private(credentials)
             .and_then(|mut file| file.write_all(contents.as_bytes()))
