@@ -89,11 +89,16 @@ Errors always go to stderr.
 
 ## Development
 
+Run these checks before you submit a change:
+
 ```sh
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
+
+The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for each pull request and each push to `main`.
+It uses the toolchain in `rust-toolchain.toml`. It needs no database, credentials or paid services.
 
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 
