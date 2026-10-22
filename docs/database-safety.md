@@ -100,7 +100,7 @@ The dump deadline limits only the time that the snapshot stays open.
 
 - Svalbard starts the native client directly, without a shell.
 - Svalbard builds the full argument list. The configuration cannot add raw client options.
-- The child environment contains only the variables that Svalbard sets. Inherited `PGOPTIONS`, `PG*` and `MYSQL_*` variables do not reach the client.
+- The child environment contains only `PATH` and the variables that Svalbard sets. Inherited `PGOPTIONS`, `PG*` and `MYSQL_*` variables do not reach the client.
 - Credentials go in a private file in the run directory. They are never in arguments or in the environment.
 - On Linux, Svalbard sets `PR_SET_PDEATHSIG`. Then the client receives `SIGTERM` if Svalbard stops without cleanup.
 
