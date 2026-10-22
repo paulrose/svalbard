@@ -43,6 +43,8 @@ Unknown keys, empty values and invalid values are errors.
 | `source.database` | Required | Database name |
 | `source.user` | Required | User name |
 | `source.password_file` | None | Path to a file that holds the password |
+| `source.tls` | `verify-full` | `verify-full` or `disable` |
+| `source.tls_ca_file` | The system trust store | Path to a PEM file with the CA certificates |
 | `destination.type` | Required | `s3` |
 | `destination.bucket` | Required | Bucket name |
 | `destination.prefix` | Empty | Prefix for object keys |
@@ -52,6 +54,9 @@ Unknown keys, empty values and invalid values are errors.
 | `safety.dump_timeout` | `1h` | `1min` to `24h` |
 | `safety.max_dump_size` | `20GiB` | `1MiB` to `16TiB` |
 | `safety.min_free_space` | `2GiB` | `0B` to `1TiB` |
+
+With `verify-full`, the database connections require TLS, and Svalbard checks the server certificate and host name.
+Without `source.tls_ca_file`, Svalbard uses the system trust store, and `pg_dump` needs libpq 16 or newer.
 
 A duration is a whole number with `s`, `min` or `h`. A size is a whole number with `B`, `KiB`, `MiB`, `GiB` or `TiB`.
 The [database safety contract](docs/database-safety.md) explains the safety limits.
@@ -98,7 +103,18 @@ cargo test --locked
 ```
 
 The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for each pull request and each push to `main`.
-It uses the toolchain in `rust-toolchain.toml`. It needs no database, credentials or paid services.
+It uses the toolchain in `rust-toolchain.toml`. It needs no credentials or paid services.
+
+The PostgreSQL tests need Docker, OpenSSL, and `pg_dump` and `pg_restore` of the server's major version.
+[`scripts/test-postgresql.sh`](scripts/test-postgresql.sh) starts a disposable server with TLS and prints the test environment.
+The second argument is the host port, which is 5432 by default.
+
+```sh
+export $(scripts/test-postgresql.sh 18 55432)
+cargo test --locked --test postgresql -- --ignored
+```
+
+CI runs these tests against PostgreSQL 15, 16, 17 and 18.
 
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 

@@ -47,7 +47,7 @@ impl Source for Fake {
         Ok("test 1.0".to_owned())
     }
 
-    fn client(&self, _run_id: &str, credentials: &Path) -> Client {
+    fn client(&self, _run_id: &str, credentials: &Path, _safety: &Safety) -> Client {
         self.started.set(true);
         Client {
             args: vec![
@@ -263,6 +263,20 @@ async fn watchdog_stops_the_backup() {
         assert!(fake.terminated, "{error}");
         assert!(elapsed < Duration::from_secs(8), "{error}: {elapsed:?}");
     }
+}
+
+#[tokio::test]
+async fn client_failure_during_a_lock_wait_is_a_lock_timeout() {
+    // A client that ends its own lock wait, like `pg_dump --lock-wait-timeout`.
+    let mut fake = Fake::new(
+        "sleep 2; echo 'canceling statement due to statement timeout' >&2; exit 1",
+        waiting(Wait::Backup("table app.users".to_owned())),
+    );
+    let (error, _) = failure(&mut fake, &safety(), future::pending()).await;
+
+    assert_eq!(error.kind, Failure::LockTimeout, "{error}");
+    assert!(error.message.contains("table app.users"), "{error}");
+    assert!(error.message.contains("statement timeout"), "{error}");
 }
 
 #[tokio::test]

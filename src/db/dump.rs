@@ -92,7 +92,7 @@ async fn dump_to<S: Source>(
         () = cancel.as_mut() => return Err(cancelled()),
     };
 
-    let client = source.client(&run.id, credentials);
+    let client = source.client(&run.id, credentials, safety);
     if let Some(contents) = &client.credentials {
         staging::create_private(credentials)
             .and_then(|mut file| file.write_all(contents.as_bytes()))
@@ -171,14 +171,19 @@ async fn supervise<S: Source>(
                     return Ok(());
                 }
                 let stderr = stderr.await.unwrap_or_default();
-                return Err(Error::new(
-                    Failure::Client,
-                    format!(
-                        "{} failed with {status}: {}",
-                        S::CLIENT,
-                        String::from_utf8_lossy(&stderr).trim()
+                let failed = format!(
+                    "{} failed with {status}: {}",
+                    S::CLIENT,
+                    String::from_utf8_lossy(&stderr).trim()
+                );
+                // The client's own lock timeout ends a wait before the watchdog does.
+                return Err(match watchdog.backup_wait() {
+                    Some(lock) => Error::new(
+                        Failure::LockTimeout,
+                        format!("the backup waited for {lock}, then {failed}"),
                     ),
-                ));
+                    None => Error::new(Failure::Client, failed),
+                });
             },
             _ = ticks.tick() => {
                 // A longer query would delay the output copy, the deadline and cancellation.
@@ -264,6 +269,14 @@ impl Watchdog {
             }
         }
         Ok(())
+    }
+
+    /// A lock that a backup session waited for at the last detection.
+    fn backup_wait(&self) -> Option<&str> {
+        self.waits.keys().find_map(|wait| match wait {
+            Wait::Backup(lock) => Some(lock.as_str()),
+            Wait::Blocked(_) => None,
+        })
     }
 }
 

@@ -13,6 +13,9 @@ port = 5432
 database = "app"
 user = "backup"
 # password_file = "/run/secrets/db-password"
+# TLS with a verified certificate and host name. Without tls_ca_file, the system trust store.
+tls = "verify-full"
+# tls_ca_file = "/etc/ssl/certs/db-ca.pem"
 
 [destination]
 type = "s3"

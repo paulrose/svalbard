@@ -10,8 +10,12 @@ repository = "https://github.com/paulrose/svalbard"
 [dependencies]
 clap = { version = "4.6.7", features = ["derive", "env"] }
 rustix = { version = "1.1.5", features = ["fs", "process"] }
+rustls = "0.23.46"
+rustls-native-certs = "0.8.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 tokio = { version = "1.54.1", features = ["rt", "macros", "process", "time", "io-util", "fs"] }
+tokio-postgres = "0.7.18"
+tokio-postgres-rustls = "0.14.0"
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }

@@ -32,6 +32,8 @@ A failed run never reports success. Svalbard never uploads a staged file from a 
 `pg_dump` refuses to dump a server that is newer than its own major version.
 An archive from `pg_dump` 17 or newer has archive format 1.16, which `pg_restore` 16 and older cannot read.
 Restore an archive with a `pg_restore` of the same major version as the `pg_dump` that wrote it, or newer.
+`pg_restore` 17 and newer send `SET transaction_timeout = 0`, which servers 15 and 16 reject. `pg_restore` reports this error, continues, and exits with status 1.
+For a clean restore into servers 15 and 16, dump them with `pg_dump` of the same major version.
 
 The MySQL manual gives no compatibility matrix for clients and servers of different series, so Svalbard requires the same series.
 Use the newest patch release. `mysqldump` 8.4.13 and 9.7.4 correct faults with malicious server metadata.
@@ -134,6 +136,9 @@ While the client runs, the watchdog runs once per second. It cancels the backup 
 | The dump runs for longer than `dump_timeout`. | `dump_timeout` |
 | Detection fails for longer than `contention_timeout`, or the backup session does not appear within `lock_timeout`. | `detection_lost` |
 
+If the client exits with an error while a backup session waits for a lock, the run fails with `lock_timeout`.
+This happens when the server-side lock timeout of the client ends the wait before the watchdog.
+
 Svalbard does not wait for contention to stop.
 A schema change that waits for the dump also blocks later reads and writes on the same table. In PostgreSQL, it can wait until the dump ends.
 
@@ -216,7 +221,7 @@ Svalbard enforces all deadlines from outside.
 
 Svalbard passes `--lock-wait-timeout=<lock_timeout>`.
 `pg_dump` applies this value as `statement_timeout` to each `LOCK TABLE` batch, at the start of the dump only.
-The watchdog limits all other lock waits.
+When this timeout ends the dump, the run fails with `lock_timeout`. The watchdog limits all other lock waits.
 
 `pg_dump` does not reset `client_connection_check_interval`.
 If the server accepts the setting, Svalbard sets it to 10 s through `PGOPTIONS`.
@@ -224,6 +229,9 @@ Then the server ends the session within 10 s after the client disconnects (Exper
 The setting needs a Linux, macOS, illumos or BSD server.
 
 ### Arguments
+
+Svalbard passes `--format=custom`, `--no-password` and `--lock-wait-timeout`.
+The connection settings go through `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSSLMODE` and `PGSSLROOTCERT`, and the password through `PGPASSFILE`.
 
 Svalbard never passes these options:
 
@@ -276,6 +284,9 @@ Without `client_connection_check_interval`, a backend that waits for a lock dete
 - `pg_read_all_data` does not include large objects. A database with large objects needs the privileges on them.
 - `pg_read_all_data` does not bypass row-level security. If a table has policies, the role needs `BYPASSRLS`, or `pg_dump` fails.
 - Detection and cancellation need no additional privileges.
+
+The preflight lists the tables and sequences that the role cannot read, and the tables with row-level security that applies to the role.
+It does not check large objects.
 
 ### Scope
 
