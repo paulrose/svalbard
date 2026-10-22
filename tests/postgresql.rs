@@ -403,6 +403,8 @@ async fn connection_problems_fail_before_the_dump() {
     let fixture = Fixture::create("connection").await;
     let wrong = Path::new(env!("CARGO_TARGET_TMPDIR")).join("svalbard_connection-wrong");
     fs::write(&wrong, "s3cr3t-wrong").unwrap();
+    let multiline = Path::new(env!("CARGO_TARGET_TMPDIR")).join("svalbard_connection-lines");
+    fs::write(&multiline, "s3cr3t\nsecond line").unwrap();
 
     for (source, message) in [
         (
@@ -411,6 +413,13 @@ async fn connection_problems_fail_before_the_dump() {
                 ..fixture.source(verify_full())
             },
             "password authentication failed",
+        ),
+        (
+            Source {
+                password: Password::File(multiline),
+                ..fixture.source(verify_full())
+            },
+            "line break",
         ),
         // The system trust store does not hold the test CA.
         (fixture.source(Tls::VerifyFull(None)), "certificate"),

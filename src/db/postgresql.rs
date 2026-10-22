@@ -37,16 +37,20 @@ const TERMINATE: &str = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
 WHERE application_name = $1 AND usename = current_user";
 
 /// The tables and sequences that `pg_dump` must read but the role cannot. Row-level security
-/// fails the dump unless it does not apply to the role.
+/// fails the dump unless it does not apply to the role. Of the extension members, `pg_dump`
+/// reads only the configuration tables.
 const DENIED: &str = "SELECT format('%s %I.%I',
     CASE c.relkind WHEN 'S' THEN 'sequence' ELSE 'table' END, n.nspname, c.relname)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p', 'S')
   AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'
-  AND NOT EXISTS (
-    SELECT FROM pg_depend d
-    WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
+  AND (
+    c.oid IN (SELECT unnest(extconfig) FROM pg_extension)
+    OR NOT EXISTS (
+      SELECT FROM pg_depend d
+      WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
+    )
   )
   AND (
     NOT has_schema_privilege(n.oid, 'USAGE')
@@ -73,6 +77,15 @@ impl Postgres {
     pub fn new(source: config::Source) -> Result<Postgres, Error> {
         let preflight = |message| Error::new(Failure::Preflight, message);
         let password = source.password.read().map_err(preflight)?;
+        // A libpq password file holds one password per line.
+        if password
+            .as_ref()
+            .is_some_and(|password| password.contains(['\n', '\r']))
+        {
+            return Err(preflight(
+                "the source password contains a line break, which pg_dump cannot read.".to_owned(),
+            ));
+        }
         let tls = match &source.tls {
             Tls::VerifyFull(ca_file) => Some(connector(ca_file.as_deref()).map_err(preflight)?),
             Tls::Disable => None,
@@ -203,6 +216,8 @@ impl Source for Postgres {
             ("PGUSER", source.user.clone().into()),
             ("PGAPPNAME", label(run_id).into()),
             ("PGPASSFILE", credentials.into()),
+            // libpq prefers GSS encryption to TLS. The control connection uses TLS only.
+            ("PGGSSENCMODE", "disable".into()),
         ];
         match &source.tls {
             Tls::VerifyFull(ca_file) => {
@@ -221,7 +236,12 @@ impl Source for Postgres {
             args: vec![
                 "--format=custom".into(),
                 "--no-password".into(),
-                format!("--lock-wait-timeout={}s", safety.lock_timeout.as_secs()).into(),
+                // A backstop if Svalbard stops. The watchdog ends a lock wait first, as lock_timeout.
+                format!(
+                    "--lock-wait-timeout={}s",
+                    (safety.lock_timeout + TIMEOUT).as_secs()
+                )
+                .into(),
             ],
             env,
             credentials: self.password.as_deref().map(password_file),

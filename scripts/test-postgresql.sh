@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Starts a disposable PostgreSQL server with TLS in Docker for the PostgreSQL tests.
+# It listens on 127.0.0.1 only. Stop it with `docker stop svalbard-postgresql-<version>`.
 # Prints the environment for `cargo test --test postgresql -- --ignored`.
 #
 # Usage: export $(scripts/test-postgresql.sh <major version> [port])
@@ -22,7 +23,7 @@ openssl x509 -req -days 2 -in "$dir/server.csr" -CA "$dir/ca.crt" -CAkey "$dir/c
 
 docker rm --force "$name" >/dev/null 2>&1 || true
 # The server needs a key file that its own user owns.
-docker run --detach --rm --name "$name" --publish "$port:5432" \
+docker run --detach --rm --name "$name" --publish "127.0.0.1:$port:5432" \
   --env POSTGRES_PASSWORD=postgres --volume "$dir:/certs:ro" \
   "postgres:$version" bash -c 'install -o postgres -m 600 /certs/server.crt /certs/server.key /tmp/ &&
     exec docker-entrypoint.sh postgres -c ssl=on \

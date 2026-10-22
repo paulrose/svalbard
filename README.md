@@ -107,11 +107,12 @@ It uses the toolchain in `rust-toolchain.toml`. It needs no credentials or paid 
 
 The PostgreSQL tests need Docker, OpenSSL, and `pg_dump` and `pg_restore` of the server's major version.
 [`scripts/test-postgresql.sh`](scripts/test-postgresql.sh) starts a disposable server with TLS and prints the test environment.
-The second argument is the host port, which is 5432 by default.
+The second argument is the host port, which is 5432 by default. The server listens on `127.0.0.1` only.
 
 ```sh
 export $(scripts/test-postgresql.sh 18 55432)
 cargo test --locked --test postgresql -- --ignored
+docker stop svalbard-postgresql-18
 ```
 
 CI runs these tests against PostgreSQL 15, 16, 17 and 18.
