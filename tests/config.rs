@@ -261,3 +261,16 @@ fn tls_settings_are_checked() {
         }
     }
 }
+
+#[test]
+fn source_type_is_postgresql_or_mysql() {
+    let file = config_file("source-type", BASE);
+
+    for (kind, code) in [("postgresql", 0), ("mysql", 0), ("mariadb", 3)] {
+        let (actual, _, stderr) = check(&["--config", &file, "--source-type", kind], &[]);
+
+        assert_eq!(actual, Some(code), "{kind}: {stderr}");
+    }
+    let (_, _, stderr) = check(&["--config", &file, "--source-type", "mariadb"], &[]);
+    assert!(stderr.contains("Use `postgresql` or `mysql`"), "{stderr}");
+}

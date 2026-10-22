@@ -37,7 +37,8 @@ const STDERR_TAIL: usize = 4096;
 
 /// Dumps `source` into the run directory.
 ///
-/// Returns when the client exited, the staged file is closed and no backup session remains.
+/// Returns when the client exited, the staged file is closed, no backup session remains, and
+/// [`Source::verify`] passed.
 /// After an error, the client has exited and the run directory holds no dump. No backup
 /// session remains unless the error is [`Failure::CleanupFailed`]. The credential file is
 /// always deleted.
@@ -116,6 +117,14 @@ async fn dump_to<S: Source>(
         });
     }
     end_sessions(source, &run.id).await?;
+    time::timeout(GRACE, source.verify())
+        .await
+        .unwrap_or_else(|_| {
+            Err(Error::new(
+                Failure::DetectionLost,
+                "the source check timed out",
+            ))
+        })?;
     let (size, sha256) = staged.finish().await?;
     Ok(Dump {
         path: path.to_owned(),

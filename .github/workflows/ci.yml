@@ -22,26 +22,24 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
-  postgresql:
+  databases:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
+      # Every supported server version, in pairs. The test image holds the matching clients.
       matrix:
-        version: [15, 16, 17, 18]
+        include:
+          - { postgresql: "15", mysql: "8.4" }
+          - { postgresql: "16", mysql: "9.7" }
+          - { postgresql: "17", mysql: "8.4" }
+          - { postgresql: "18", mysql: "9.7" }
+    name: databases (PostgreSQL ${{ matrix.postgresql }}, MySQL ${{ matrix.mysql }})
     env:
-      VERSION: ${{ matrix.version }}
+      POSTGRESQL: ${{ matrix.postgresql }}
+      MYSQL: ${{ matrix.mysql }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup toolchain install
-      # pg_dump and pg_restore of the server's major version, from the PostgreSQL apt repository.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes --no-install-recommends "postgresql-client-$VERSION"
-          echo "/usr/lib/postgresql/$VERSION/bin" >> "$GITHUB_PATH"
-      - run: scripts/test-postgresql.sh "$VERSION" >> "$GITHUB_ENV"
-      - run: cargo test --locked --test postgresql -- --ignored
+      - run: scripts/test-databases.sh "$POSTGRESQL" "$MYSQL"

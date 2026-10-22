@@ -7,6 +7,7 @@
 # Validate it with: svalbard config check --config examples/svalbard.toml
 
 [source]
+# postgresql or mysql. The default port is 5432 for PostgreSQL and 3306 for MySQL.
 type = "postgresql"
 host = "db.example.com"
 port = 5432

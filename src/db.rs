@@ -5,6 +5,7 @@
 //! the watchdog, cancellation and the closure check.
 
 mod dump;
+mod mysql;
 mod postgresql;
 
 use std::{ffi::OsString, fmt, path::Path, path::PathBuf};
@@ -14,6 +15,7 @@ use serde::Serialize;
 use crate::config::Safety;
 
 pub use dump::dump;
+pub use mysql::Mysql;
 pub use postgresql::Postgres;
 
 /// The source-specific steps of a dump. [`dump`] runs them in the order of the safety contract.
@@ -41,6 +43,11 @@ pub trait Source {
 
     /// Ends the backup sessions of this run on the server, and no other sessions.
     async fn terminate(&mut self, run_id: &str) -> Result<(), String>;
+
+    /// Checks the source after the client exited and no backup session remains.
+    async fn verify(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// The arguments and environment of the client. It runs without a shell, and its environment
@@ -103,6 +110,8 @@ pub enum Failure {
     DumpTimeout,
     DetectionLost,
     StagingLimit,
+    /// The table definitions changed during the dump.
+    SchemaChanged,
     /// A staging file cannot be written.
     Staging,
     Cancelled,
@@ -126,3 +135,12 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// The first five items, and the number of the others.
+fn listing(items: &[String]) -> String {
+    let mut listing = items[..items.len().min(5)].join(", ");
+    if items.len() > 5 {
+        listing += &format!(" and {} more", items.len() - 5);
+    }
+    listing
+}

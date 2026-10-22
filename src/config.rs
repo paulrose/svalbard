@@ -31,12 +31,20 @@ pub struct Config {
 
 #[derive(Debug)]
 pub struct Source {
+    pub kind: Kind,
     pub host: String,
     pub port: u16,
     pub database: String,
     pub user: String,
     pub password: Password,
     pub tls: Tls,
+}
+
+/// The database system of the source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Postgresql,
+    Mysql,
 }
 
 /// Where the source password comes from. Validation never reads the password.
@@ -243,11 +251,19 @@ pub fn load(
     let (destination, file_destination) = (&flags.destination, &file.destination);
     let (safety, file_safety) = (&flags.safety, &file.safety);
 
-    expect_type(
-        "source.type",
-        pick(&source.r#type, &file_source.r#type),
-        "postgresql",
-    )?;
+    let kind = match required("source.type", pick(&source.r#type, &file_source.r#type))?.as_str() {
+        "postgresql" => Kind::Postgresql,
+        "mysql" => Kind::Mysql,
+        value => {
+            return Err(format!(
+                "source.type is `{value}`. Use `postgresql` or `mysql`."
+            ));
+        }
+    };
+    let default_port = match kind {
+        Kind::Postgresql => "5432",
+        Kind::Mysql => "3306",
+    };
     expect_type(
         "destination.type",
         pick(&destination.r#type, &file_destination.r#type),
@@ -256,8 +272,9 @@ pub fn load(
 
     Ok(Config {
         source: Source {
+            kind,
             host: required("source.host", pick(&source.host, &file_source.host))?,
-            port: port(pick(&source.port, &file_source.port).unwrap_or("5432"))?,
+            port: port(pick(&source.port, &file_source.port).unwrap_or(default_port))?,
             database: required(
                 "source.database",
                 pick(&source.database, &file_source.database),
