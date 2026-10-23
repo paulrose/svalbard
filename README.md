@@ -1,7 +1,7 @@
 # Svalbard
 
 Svalbard is an open-source Rust CLI for database backups.
-This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3, Cloudflare R2 or another S3-compatible service.
+This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3, Cloudflare R2, another S3-compatible service, or an SSH server with SFTP or SCP.
 
 ## Build and run
 
@@ -45,12 +45,18 @@ Unknown keys, empty values and invalid values are errors.
 | `source.password_file` | None | Path to a file that holds the password |
 | `source.tls` | `verify-full` | `verify-full` or `disable` |
 | `source.tls_ca_file` | The system trust store | Path to a PEM file with the CA certificates |
-| `destination.type` | Required | `s3` or `r2` |
-| `destination.bucket` | Required | Bucket name |
-| `destination.prefix` | Empty | Prefix for object keys |
+| `destination.type` | Required | `s3`, `r2`, `sftp` or `scp` |
+| `destination.prefix` | Empty | Prefix for object keys or file names. For SSH: letters, digits, `.`, `_`, `-` and `/` |
+| `destination.upload_timeout` | `1h` | `1min` to `24h` |
+| `destination.bucket` | Required for S3 and R2 | Bucket name |
 | `destination.region` | From the AWS configuration, `auto` for R2 | AWS Region |
 | `destination.endpoint` | AWS, required for R2 | URL of an S3-compatible service, such as `https://s3.example.com` |
-| `destination.upload_timeout` | `1h` | `1min` to `24h` |
+| `destination.host` | Required for SSH | Host name or IP address |
+| `destination.port` | `22` | `1` to `65535` |
+| `destination.user` | Required for SSH | User name |
+| `destination.path` | Required for SSH | Existing absolute directory on the server, without `\`, `"` or line breaks |
+| `destination.identity_file` | The SSH agent and the default keys | Path to an unencrypted private key |
+| `destination.known_hosts_file` | `~/.ssh/known_hosts` and `/etc/ssh/ssh_known_hosts` | Path to a known_hosts file |
 | `safety.lock_timeout` | `10s` | `1s` to `5min` |
 | `safety.contention_timeout` | `2s` | `1s` to `60s` |
 | `safety.dump_timeout` | `1h` | `1min` to `24h` |
@@ -71,6 +77,7 @@ The configuration file and flags never hold secrets. The file rejects keys such 
 - If the database needs no password, set neither. An empty `SVALBARD_SOURCE_PASSWORD` is an error, because CI systems give an empty value for a missing secret.
 - For S3, Svalbard uses the AWS credential chain: environment variables such as `AWS_ACCESS_KEY_ID`, a shared AWS profile, a web identity token from CI, or an instance or container role. Static keys are not necessary.
 - For R2, Svalbard reads only `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. It never sends AWS credentials to Cloudflare.
+- For SSH, Svalbard uses the SSH agent in `SSH_AUTH_SOCK`, or `destination.identity_file`. A key file must be unencrypted, because Svalbard never prompts for a passphrase.
 
 `config check` does not read the password. It checks that the password file opens.
 Secret values do not appear in errors or in the JSON result.
@@ -132,6 +139,34 @@ The record and `x-amz-meta-sha256` hold the SHA-256 for every dump.
 
 R2 aborts incomplete multipart uploads after 7 days by default.
 
+#### SSH: SFTP and SCP
+
+```toml
+[destination]
+type = "sftp"          # or "scp"
+host = "backup.example.com"
+user = "svalbard"
+path = "/srv/backups"
+known_hosts_file = "/etc/svalbard/known_hosts"
+```
+
+[`examples/sftp.toml`](examples/sftp.toml) and [`examples/scp.toml`](examples/scp.toml) are complete examples.
+Svalbard runs the OpenSSH clients `sftp`, `scp` and `ssh`. `scp` must accept `-O`: OpenSSH 9.0 or newer, or a distribution that backports it.
+Svalbard ignores `ssh_config`, never prompts, and checks the host key strictly. The key must already be in the known_hosts file, and Svalbard never adds it.
+
+Each file goes to a hidden temporary name, such as `.<name>.<random>.partial`, in the same directory.
+Svalbard renames it only after the server has the complete file, so the dump and the record appear complete or not at all.
+After an error or cancellation, Svalbard stops the client and removes the temporary file. If the removal fails, the result is `cleanup_failed`.
+The files keep the permissions of the staged files, `0600`.
+
+SSH protects every byte in transit, and the server confirms the writes. Svalbard also checks the size of the remote file before the rename.
+The record holds the SHA-256 of the dump.
+
+- `sftp` uses the SFTP subsystem. The server must offer `fsync@openssh.com`, so that the file is on disk before the rename. With `posix-rename@openssh.com`, a retry of the same run replaces the files. OpenSSH's `sftp-server` offers both.
+- `scp` uses the legacy SCP protocol for servers without SFTP. The account needs a POSIX login shell that prints nothing, and `scp`, `mv`, `rm` and `wc` on the server. SCP confirms each file, not each write, and it cannot sync the file to disk.
+
+A host key that is missing or does not match gives `host_key_rejected`. A rejected key or a denied write gives `access_denied`.
+
 ### Output and exit codes
 
 Without `--json`, a valid configuration prints `Configuration is valid.` on stdout.
@@ -157,8 +192,8 @@ cargo test --locked
 The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for each pull request and each push to `main`.
 It uses the toolchain in `rust-toolchain.toml`. The `check` and `integration` jobs need no credentials or paid services.
 
-The PostgreSQL, MySQL and S3 tests run in Docker, which is their only requirement.
-[`scripts/test-integration.sh`](scripts/test-integration.sh) starts both database servers with TLS and the [Floci](https://github.com/floci-io/floci) S3 emulator on a private network, and a runner container that installs Rust and the native clients.
+The PostgreSQL, MySQL, S3 and SSH tests run in Docker, which is their only requirement.
+[`scripts/test-integration.sh`](scripts/test-integration.sh) starts both database servers with TLS, the [Floci](https://github.com/floci-io/floci) S3 emulator and an OpenSSH server on a private network, and a runner container that installs Rust and the native clients.
 The arguments are the PostgreSQL version and the MySQL series. The defaults are 18 and 8.4.
 The script writes nothing to the host. At the end, it removes the containers, the volumes and the images that it pulled.
 
@@ -167,7 +202,7 @@ scripts/test-integration.sh
 scripts/test-integration.sh 15 9.7
 ```
 
-CI runs these tests against PostgreSQL 15, 16, 17 and 18, MySQL 8.4 and 9.7, and Floci.
+CI runs these tests against PostgreSQL 15, 16, 17 and 18, MySQL 8.4 and 9.7, Floci, and OpenSSH on Alpine Linux.
 
 The R2 tests need a real R2 bucket. [`scripts/test-r2.sh`](scripts/test-r2.sh) runs them in Docker.
 Set `SVALBARD_TEST_R2_ENDPOINT` and `SVALBARD_TEST_R2_BUCKET`, and the keys of an R2 API token with Object Read & Write on the bucket in `SVALBARD_TEST_R2_ACCESS_KEY_ID` and `SVALBARD_TEST_R2_SECRET_ACCESS_KEY`.

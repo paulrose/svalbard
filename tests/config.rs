@@ -45,7 +45,7 @@ fn check(args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String, String) {
 
 #[test]
 fn documented_examples_are_valid() {
-    for example in ["svalbard.toml", "r2.toml"] {
+    for example in ["svalbard.toml", "r2.toml", "sftp.toml", "scp.toml"] {
         let path = format!("{}/examples/{example}", env!("CARGO_MANIFEST_DIR"));
         let (code, stdout, stderr) = check(&["--config", &path], &[]);
 
@@ -292,7 +292,11 @@ fn destination_type_endpoint_and_upload_timeout_are_checked() {
     for (args, error) in [
         (
             vec!["--destination-type", "gcs"],
-            Some("destination.type is `gcs`. Use `s3` or `r2`."),
+            Some("destination.type is `gcs`. Use `s3`, `r2`, `sftp` or `scp`."),
+        ),
+        (
+            vec!["--destination-host", "backup.example.com"],
+            Some("destination.host does not apply to destination.type `s3`."),
         ),
         (
             vec!["--destination-type", "r2"],
@@ -333,15 +337,86 @@ fn destination_type_endpoint_and_upload_timeout_are_checked() {
             Some("destination.upload_timeout must be from 1min to 24h"),
         ),
     ] {
-        let (code, _, stderr) = check(&[&["--config", file.as_str()], &args[..]].concat(), &[]);
+        expect(&file, &args, error);
+    }
+}
 
-        match error {
-            None => assert_eq!(code, Some(0), "{args:?}: {stderr}"),
-            Some(error) => {
-                assert_eq!(code, Some(3), "{args:?}");
-                assert!(stderr.contains(error), "{args:?}: {stderr}");
-                assert!(!stderr.contains(SECRET), "{args:?}: {stderr}");
-            }
+#[test]
+fn ssh_destinations_are_checked() {
+    let file = config_file(
+        "ssh",
+        &BASE.replace(
+            "type = \"s3\"\nbucket = \"example-backups\"",
+            "type = \"sftp\"\nhost = \"backup.example.com\"\nuser = \"svalbard\"\n\
+             path = \"/srv/backups\"",
+        ),
+    );
+    let key = config_file("ssh-key", "");
+
+    for (args, error) in [
+        (vec![], None),
+        (
+            vec!["--destination-type", "scp", "--destination-port", "2222"],
+            None,
+        ),
+        (vec!["--destination-host", "2001:db8::1"], None),
+        (
+            vec![
+                "--destination-identity-file",
+                &key,
+                "--destination-known-hosts-file",
+                &key,
+            ],
+            None,
+        ),
+        (vec!["--destination-prefix", "app/daily-"], None),
+        (
+            vec!["--destination-host=-oProxyCommand=x"],
+            Some("destination.host is `-oProxyCommand=x`. Use a host name or an IP address."),
+        ),
+        (
+            vec!["--destination-user", "svalbard@example"],
+            Some("destination.user is `svalbard@example`."),
+        ),
+        (
+            vec!["--destination-path", "srv/backups"],
+            Some("destination.path is `srv/backups`. Use an absolute path"),
+        ),
+        (
+            vec!["--destination-path", "/srv/a\"b"],
+            Some("Use an absolute path without"),
+        ),
+        (
+            vec!["--destination-prefix", "app $(id)/"],
+            Some("For SSH, use letters, digits"),
+        ),
+        (
+            vec!["--destination-port", "0"],
+            Some("destination.port is `0`."),
+        ),
+        (
+            vec!["--destination-bucket", "example-backups"],
+            Some("destination.bucket does not apply to destination.type `sftp`."),
+        ),
+        (
+            vec!["--destination-identity-file", "/nonexistent/key"],
+            Some("destination.identity_file /nonexistent/key cannot be opened"),
+        ),
+    ] {
+        expect(&file, &args, error);
+    }
+}
+
+/// Checks the configuration with `args`, which must fail with `error` or pass.
+fn expect(file: &str, args: &[&str], error: Option<&str>) {
+    let (code, _, stderr) = check(&[&["--config", file], args].concat(), &[]);
+
+    match error {
+        None => assert_eq!(code, Some(0), "{args:?}: {stderr}"),
+        Some(error) => {
+            assert_eq!(code, Some(3), "{args:?}");
+            assert!(stderr.contains(error), "{args:?}: {stderr}");
+            assert!(!stderr.contains(SECRET), "{args:?}: {stderr}");
         }
     }
 }

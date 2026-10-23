@@ -7,11 +7,10 @@ mod common;
 
 use std::{
     env, future,
-    net::SocketAddr,
     process::Command,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -21,21 +20,28 @@ use aws_sdk_s3::{
     config::{BehaviorVersion, Credentials, Region},
     types::ChecksumMode,
 };
-use common::{hex, staged, store};
+use common::{Fault, hex, proxy, staged, store};
 use sha2::{Digest, Sha256};
 use svalbard::{
-    config::{self, Provider},
+    config::{self, ObjectStore, Provider, Target},
     storage::Failure,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-    sync::Notify,
+    net::TcpListener,
 };
 
 fn endpoint() -> String {
     env::var("SVALBARD_TEST_S3_ENDPOINT")
         .expect("SVALBARD_TEST_S3_ENDPOINT must be set: run scripts/test-integration.sh")
+}
+
+/// The host and port of Floci, for the test proxy.
+fn upstream() -> String {
+    endpoint()
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned()
 }
 
 /// A client with the setup key, which Floci never checks.
@@ -73,11 +79,13 @@ async fn bucket(name: &str, deny: Option<(&str, &str)>) -> String {
 
 fn destination(bucket: &str, endpoint: String, upload_timeout: Duration) -> config::Destination {
     config::Destination {
-        provider: Provider::S3,
-        bucket: bucket.to_owned(),
+        target: Target::ObjectStore(ObjectStore {
+            provider: Provider::S3,
+            bucket: bucket.to_owned(),
+            region: None,
+            endpoint: Some(endpoint),
+        }),
         prefix: "app/".to_owned(),
-        region: None,
-        endpoint: Some(endpoint),
         upload_timeout,
     }
 }
@@ -126,84 +134,6 @@ fn download(bucket: &str, key: &str) -> Vec<u8> {
         String::from_utf8_lossy(&output.stderr)
     );
     output.stdout
-}
-
-/// What the test proxy does to the traffic to Floci.
-#[derive(Clone, Copy)]
-enum Fault {
-    /// Stops the connection that sends more than this many bytes in total.
-    StallAfter(u64),
-    /// Like `StallAfter`, and then refuses every new connection, so cleanup cannot reach Floci.
-    StallThenRefuse(u64),
-    /// Never returns the answer to the first request.
-    HoldFirstResponse,
-}
-
-/// A TCP proxy to Floci. Connections that open after the fault pass unchanged, so cleanup
-/// requests reach Floci.
-struct Proxy {
-    endpoint: String,
-    /// Notified when the proxy stalls a connection.
-    stalled: Arc<Notify>,
-}
-
-async fn proxy(fault: Fault) -> Proxy {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address: SocketAddr = listener.local_addr().unwrap();
-    let upstream = endpoint()
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned();
-    let stalled = Arc::new(Notify::new());
-    let sent = Arc::new(AtomicU64::new(0));
-    let faulted = Arc::new(AtomicBool::new(false));
-    let connections = Arc::new(AtomicUsize::new(0));
-    let notify = stalled.clone();
-    tokio::spawn(async move {
-        loop {
-            let (client, _) = listener.accept().await.unwrap();
-            if matches!(fault, Fault::StallThenRefuse(_)) && faulted.load(Ordering::SeqCst) {
-                continue;
-            }
-            let server = TcpStream::connect(&upstream).await.unwrap();
-            let first = connections.fetch_add(1, Ordering::SeqCst) == 0;
-            let active = !faulted.load(Ordering::SeqCst);
-            let (sent, faulted, notify) = (sent.clone(), faulted.clone(), notify.clone());
-            tokio::spawn(async move {
-                let (mut client_read, mut client_write) = client.into_split();
-                let (mut server_read, mut server_write) = server.into_split();
-                let hold = first && matches!(fault, Fault::HoldFirstResponse);
-                tokio::spawn(async move {
-                    if hold {
-                        future::pending::<()>().await;
-                    }
-                    let _ = tokio::io::copy(&mut server_read, &mut client_write).await;
-                });
-                let mut buffer = vec![0; 64 << 10];
-                loop {
-                    let Ok(read @ 1..) = client_read.read(&mut buffer).await else {
-                        return;
-                    };
-                    let total = sent.fetch_add(read as u64, Ordering::SeqCst) + read as u64;
-                    if let Fault::StallAfter(limit) | Fault::StallThenRefuse(limit) = fault
-                        && active
-                        && total > limit
-                        && !faulted.swap(true, Ordering::SeqCst)
-                    {
-                        notify.notify_one();
-                        future::pending::<()>().await;
-                    }
-                    if server_write.write_all(&buffer[..read]).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-    });
-    Proxy {
-        endpoint: format!("http://{address}"),
-        stalled,
-    }
 }
 
 #[tokio::test]
@@ -296,8 +226,12 @@ async fn denied_record_leaves_an_incomplete_backup() {
 #[ignore = "needs S3: run scripts/test-integration.sh"]
 async fn cancellation_aborts_the_upload() {
     let bucket = bucket("cancel", None).await;
-    let proxy = proxy(Fault::StallAfter(8 << 20)).await;
-    let destination = destination(&bucket, proxy.endpoint, Duration::from_secs(60));
+    let proxy = proxy(&upstream(), Fault::StallAfter(8 << 20)).await;
+    let destination = destination(
+        &bucket,
+        format!("http://{}", proxy.address),
+        Duration::from_secs(60),
+    );
     let (dump, run) = staged(130 << 20);
     let error = store(&destination, &dump, &run, proxy.stalled.notified())
         .await
@@ -314,8 +248,12 @@ async fn cancellation_aborts_the_upload() {
 async fn timeout_before_the_upload_id_finds_and_aborts_the_upload() {
     let bucket = bucket("timeout", None).await;
     // Floci creates the upload, but Svalbard never receives its ID.
-    let proxy = proxy(Fault::HoldFirstResponse).await;
-    let destination = destination(&bucket, proxy.endpoint, Duration::from_secs(2));
+    let proxy = proxy(&upstream(), Fault::HoldFirstResponse).await;
+    let destination = destination(
+        &bucket,
+        format!("http://{}", proxy.address),
+        Duration::from_secs(2),
+    );
     let (dump, run) = staged(130 << 20);
     let error = store(&destination, &dump, &run, future::pending())
         .await
@@ -330,8 +268,12 @@ async fn timeout_before_the_upload_id_finds_and_aborts_the_upload() {
 #[ignore = "needs S3: run scripts/test-integration.sh"]
 async fn failed_abort_reports_the_remaining_upload() {
     let bucket = bucket("abort-fails", None).await;
-    let proxy = proxy(Fault::StallThenRefuse(8 << 20)).await;
-    let destination = destination(&bucket, proxy.endpoint, Duration::from_secs(60));
+    let proxy = proxy(&upstream(), Fault::StallThenRefuse(8 << 20)).await;
+    let destination = destination(
+        &bucket,
+        format!("http://{}", proxy.address),
+        Duration::from_secs(60),
+    );
     let (dump, run) = staged(130 << 20);
     let error = store(&destination, &dump, &run, proxy.stalled.notified())
         .await

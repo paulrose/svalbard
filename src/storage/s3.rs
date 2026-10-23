@@ -40,7 +40,7 @@ pub struct S3 {
 
 impl S3 {
     /// Reads the AWS configuration and the credential settings. Makes no request.
-    pub async fn new(destination: &config::Destination) -> S3 {
+    pub async fn new(destination: &config::ObjectStore) -> S3 {
         // Set in code, so that AWS_MAX_ATTEMPTS and similar variables cannot remove the bounds.
         let mut loader = aws_config::defaults(BehaviorVersion::v2026_01_12())
             .retry_config(RetryConfig::standard().with_max_attempts(3))

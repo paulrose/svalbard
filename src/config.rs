@@ -89,22 +89,58 @@ pub enum Tls {
 
 #[derive(Debug)]
 pub struct Destination {
+    pub target: Target,
+    pub prefix: String,
+    pub upload_timeout: Duration,
+}
+
+/// Where the backups go.
+#[derive(Debug)]
+pub enum Target {
+    ObjectStore(ObjectStore),
+    Ssh(Ssh),
+}
+
+/// A bucket of a service with the S3 API.
+#[derive(Debug)]
+pub struct ObjectStore {
     pub provider: Provider,
     pub bucket: String,
-    pub prefix: String,
     /// `auto` for R2.
     pub region: Option<String>,
     /// An S3-compatible endpoint instead of AWS, such as `https://s3.example.com`. Always set for
     /// R2.
     pub endpoint: Option<String>,
-    pub upload_timeout: Duration,
 }
 
-/// The storage service of the destination. Both use the S3 API.
+/// The storage service of an object store. Both use the S3 API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     S3,
     R2,
+}
+
+/// A directory on an SSH server.
+#[derive(Clone, Debug)]
+pub struct Ssh {
+    pub mode: SshMode,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    /// An absolute directory without `\`, `"` or line breaks.
+    pub path: String,
+    /// An absolute path. Without it, the SSH agent and the default keys.
+    pub identity_file: Option<PathBuf>,
+    /// An absolute path. Without it, the default known_hosts files of OpenSSH.
+    pub known_hosts_file: Option<PathBuf>,
+}
+
+/// The transfer protocol of an SSH destination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshMode {
+    Sftp,
+    /// The legacy SCP protocol, through the remote shell.
+    Scp,
 }
 
 #[derive(Debug)]
@@ -216,6 +252,46 @@ pub struct DestinationSettings {
     )]
     pub endpoint: Option<String>,
     #[arg(
+        id = "destination-host",
+        long = "destination-host",
+        env = "SVALBARD_DESTINATION_HOST",
+        value_name = "HOST"
+    )]
+    pub host: Option<String>,
+    #[arg(
+        id = "destination-port",
+        long = "destination-port",
+        env = "SVALBARD_DESTINATION_PORT",
+        value_name = "PORT"
+    )]
+    #[serde(deserialize_with = "port_number")]
+    pub port: Option<String>,
+    #[arg(
+        id = "destination-user",
+        long = "destination-user",
+        env = "SVALBARD_DESTINATION_USER",
+        value_name = "USER"
+    )]
+    pub user: Option<String>,
+    #[arg(
+        long = "destination-path",
+        env = "SVALBARD_DESTINATION_PATH",
+        value_name = "PATH"
+    )]
+    pub path: Option<String>,
+    #[arg(
+        long = "destination-identity-file",
+        env = "SVALBARD_DESTINATION_IDENTITY_FILE",
+        value_name = "PATH"
+    )]
+    pub identity_file: Option<PathBuf>,
+    #[arg(
+        long = "destination-known-hosts-file",
+        env = "SVALBARD_DESTINATION_KNOWN_HOSTS_FILE",
+        value_name = "PATH"
+    )]
+    pub known_hosts_file: Option<PathBuf>,
+    #[arg(
         long = "destination-upload-timeout",
         env = "SVALBARD_DESTINATION_UPLOAD_TIMEOUT",
         value_name = "DURATION"
@@ -289,25 +365,15 @@ pub fn load(
         Kind::Postgresql => "5432",
         Kind::Mysql => "3306",
     };
-    let provider = match required(
-        "destination.type",
-        pick(&destination.r#type, &file_destination.r#type),
-    )?
-    .as_str()
-    {
-        "s3" => Provider::S3,
-        "r2" => Provider::R2,
-        value => {
-            return Err(format!("destination.type is `{value}`. Use `s3` or `r2`."));
-        }
-    };
-    let endpoint_value = pick(&destination.endpoint, &file_destination.endpoint);
 
     Ok(Config {
         source: Source {
             kind,
             host: required("source.host", pick(&source.host, &file_source.host))?,
-            port: port(pick(&source.port, &file_source.port).unwrap_or(default_port))?,
+            port: port(
+                "source.port",
+                pick(&source.port, &file_source.port).unwrap_or(default_port),
+            )?,
             database: required(
                 "source.database",
                 pick(&source.database, &file_source.database),
@@ -329,26 +395,8 @@ pub fn load(
             )?,
         },
         destination: Destination {
-            provider,
-            bucket: required(
-                "destination.bucket",
-                pick(&destination.bucket, &file_destination.bucket),
-            )?,
-            prefix: pick(&destination.prefix, &file_destination.prefix)
-                .unwrap_or_default()
-                .to_owned(),
-            region: optional(
-                "destination.region",
-                pick(&destination.region, &file_destination.region),
-            )?
-            .or((provider == Provider::R2).then(|| "auto".to_owned())),
-            endpoint: endpoint(
-                provider,
-                match provider {
-                    Provider::S3 => optional("destination.endpoint", endpoint_value)?,
-                    Provider::R2 => Some(required("destination.endpoint", endpoint_value)?),
-                },
-            )?,
+            target: target(destination, file_destination)?,
+            prefix: prefix(destination, file_destination)?,
             upload_timeout: Duration::from_secs(limit(
                 "destination.upload_timeout",
                 pick(
@@ -430,13 +478,168 @@ fn optional(key: &str, value: Option<&str>) -> Result<Option<String>, String> {
     }
 }
 
-fn port(value: &str) -> Result<u16, String> {
+fn port(key: &str, value: &str) -> Result<u16, String> {
     match value.parse() {
         Ok(port) if port != 0 => Ok(port),
+        _ => Err(format!("{key} is `{value}`. Use a number from 1 to 65535.")),
+    }
+}
+
+fn target(flags: &DestinationSettings, file: &DestinationSettings) -> Result<Target, String> {
+    let kind = required("destination.type", pick(&flags.r#type, &file.r#type))?;
+    let ssh_keys = [
+        ("host", set(&flags.host, &file.host)),
+        ("port", set(&flags.port, &file.port)),
+        ("user", set(&flags.user, &file.user)),
+        ("path", set(&flags.path, &file.path)),
+        (
+            "identity_file",
+            set(&flags.identity_file, &file.identity_file),
+        ),
+        (
+            "known_hosts_file",
+            set(&flags.known_hosts_file, &file.known_hosts_file),
+        ),
+    ];
+    let object_store_keys = [
+        ("bucket", set(&flags.bucket, &file.bucket)),
+        ("region", set(&flags.region, &file.region)),
+        ("endpoint", set(&flags.endpoint, &file.endpoint)),
+    ];
+    let unused = match kind.as_str() {
+        "s3" | "r2" => &ssh_keys[..],
+        "sftp" | "scp" => &object_store_keys[..],
+        value => {
+            return Err(format!(
+                "destination.type is `{value}`. Use `s3`, `r2`, `sftp` or `scp`."
+            ));
+        }
+    };
+    if let Some((key, _)) = unused.iter().find(|(_, set)| *set) {
+        return Err(format!(
+            "destination.{key} does not apply to destination.type `{kind}`."
+        ));
+    }
+    Ok(match kind.as_str() {
+        "s3" => Target::ObjectStore(object_store(Provider::S3, flags, file)?),
+        "r2" => Target::ObjectStore(object_store(Provider::R2, flags, file)?),
+        "sftp" => Target::Ssh(ssh(SshMode::Sftp, flags, file)?),
+        _ => Target::Ssh(ssh(SshMode::Scp, flags, file)?),
+    })
+}
+
+fn set<T>(flag: &Option<T>, file: &Option<T>) -> bool {
+    flag.is_some() || file.is_some()
+}
+
+fn object_store(
+    provider: Provider,
+    flags: &DestinationSettings,
+    file: &DestinationSettings,
+) -> Result<ObjectStore, String> {
+    let endpoint_value = pick(&flags.endpoint, &file.endpoint);
+    Ok(ObjectStore {
+        provider,
+        bucket: required("destination.bucket", pick(&flags.bucket, &file.bucket))?,
+        region: optional("destination.region", pick(&flags.region, &file.region))?
+            .or((provider == Provider::R2).then(|| "auto".to_owned())),
+        endpoint: endpoint(
+            provider,
+            match provider {
+                Provider::S3 => optional("destination.endpoint", endpoint_value)?,
+                Provider::R2 => Some(required("destination.endpoint", endpoint_value)?),
+            },
+        )?,
+    })
+}
+
+/// The values go to OpenSSH and, for SCP, to the remote shell, so only plain characters pass.
+fn ssh(
+    mode: SshMode,
+    flags: &DestinationSettings,
+    file: &DestinationSettings,
+) -> Result<Ssh, String> {
+    let plain = |value: &str, extra: &str| {
+        !value.starts_with('-')
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
+    };
+    let host = required("destination.host", pick(&flags.host, &file.host))?;
+    if !plain(&host, ".:-") {
+        return Err(format!(
+            "destination.host is `{host}`. Use a host name or an IP address."
+        ));
+    }
+    let user = required("destination.user", pick(&flags.user, &file.user))?;
+    if !plain(&user, "._-") {
+        return Err(format!(
+            "destination.user is `{user}`. Use letters, digits, `.`, `_` and `-`."
+        ));
+    }
+    let path = required("destination.path", pick(&flags.path, &file.path))?;
+    if !path.starts_with('/') || path.contains(['\\', '"', '\n', '\r', '\0']) {
+        return Err(format!(
+            "destination.path is `{path}`. Use an absolute path without `\\`, `\"` or line breaks."
+        ));
+    }
+    Ok(Ssh {
+        mode,
+        host,
+        port: port(
+            "destination.port",
+            pick(&flags.port, &file.port).unwrap_or("22"),
+        )?,
+        user,
+        path,
+        identity_file: ssh_file(
+            "destination.identity_file",
+            flags
+                .identity_file
+                .as_deref()
+                .or(file.identity_file.as_deref()),
+        )?,
+        known_hosts_file: ssh_file(
+            "destination.known_hosts_file",
+            flags
+                .known_hosts_file
+                .as_deref()
+                .or(file.known_hosts_file.as_deref()),
+        )?,
+    })
+}
+
+/// An existing file for an OpenSSH option, as an absolute path. OpenSSH expands `${…}` in it
+/// and splits it at quotes.
+fn ssh_file(key: &str, path: Option<&Path>) -> Result<Option<PathBuf>, String> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = std::path::absolute(existing_file(key, path)?)
+        .map_err(|error| format!("{key} {}: {error}", path.display()))?;
+    match path.to_str() {
+        Some(text) if !text.contains(['"', '\\']) && !text.contains("${") => Ok(Some(path)),
         _ => Err(format!(
-            "source.port is `{value}`. Use a number from 1 to 65535."
+            "{key} {} must be UTF-8, without `\"`, `\\` or `${{`.",
+            path.display()
         )),
     }
+}
+
+/// For SSH, the prefix becomes part of remote file names, so only plain characters pass.
+fn prefix(flags: &DestinationSettings, file: &DestinationSettings) -> Result<String, String> {
+    let prefix = pick(&flags.prefix, &file.prefix).unwrap_or_default();
+    let ssh = matches!(pick(&flags.r#type, &file.r#type), Some("sftp" | "scp"));
+    if ssh
+        && !prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+    {
+        return Err(format!(
+            "destination.prefix is `{prefix}`. For SSH, use letters, digits, `.`, `_`, `-` and `/`."
+        ));
+    }
+    Ok(prefix.to_owned())
 }
 
 fn password(env: Option<&OsStr>, file: Option<&Path>) -> Result<Password, String> {

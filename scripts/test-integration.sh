@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs the PostgreSQL, MySQL and S3 tests in Docker, against database servers with TLS and the
-# Floci S3 emulator. Docker is the only requirement: the runner installs Rust and the native
-# clients of the server versions inside its container. At the end, the script removes the
+# Runs the PostgreSQL, MySQL, S3 and SSH tests in Docker, against database servers with TLS, the
+# Floci S3 emulator and an OpenSSH server. Docker is the only requirement: the runner installs
+# Rust and the native clients inside its container. At the end, the script removes the
 # containers, the volumes and the images that it pulled, so a run leaves nothing behind.
 #
 # Usage: scripts/test-integration.sh [postgresql version] [mysql series] [test filter]
@@ -13,7 +13,8 @@ compose=(docker compose --file "$(cd "$(dirname "$0")/.." && pwd)/tests/docker/c
 
 # Images that were here before the run stay.
 pulled=()
-for image in "postgres:$POSTGRESQL_VERSION" "mysql:$MYSQL_SERIES" "floci/floci:$FLOCI_VERSION"; do
+for image in "postgres:$POSTGRESQL_VERSION" "mysql:$MYSQL_SERIES" "floci/floci:$FLOCI_VERSION" \
+  alpine:3.24; do
   docker image inspect "$image" >/dev/null 2>&1 || pulled+=("$image")
 done
 cleanup() {
@@ -23,4 +24,4 @@ cleanup() {
 trap cleanup EXIT
 
 "${compose[@]}" run --rm tests \
-  cargo test --locked --test postgresql --test mysql --test s3 -- --ignored "${@:3}"
+  cargo test --locked --test postgresql --test mysql --test s3 --test ssh -- --ignored "${@:3}"

@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    env, fs,
+    fs,
     future::Future,
     io::{ErrorKind, Write as _},
     path::Path,
@@ -16,13 +16,14 @@ use sha2::{Digest, Sha256};
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStderr, Command},
+    process::Child,
     time::{self, Instant, MissedTickBehavior},
 };
 
 use super::{Client, Dump, Error, Failure, Observation, Source, Wait};
 use crate::{
     config::Safety,
+    process::{self, command, tail},
     staging::{self, Run},
 };
 
@@ -32,8 +33,6 @@ const INTERVAL: Duration = Duration::from_secs(1);
 const GRACE: Duration = Duration::from_secs(10);
 /// Bytes written between two free-space checks.
 const SPACE_CHECK: u64 = 64 << 20;
-/// Bytes of client standard error to keep for the error message.
-const STDERR_TAIL: usize = 4096;
 
 /// Dumps `source` into the run directory.
 ///
@@ -331,17 +330,6 @@ impl Staged<'_> {
     }
 }
 
-/// A command for the native client. It runs without a shell, with only `PATH` from the
-/// environment, so that inherited client options such as `PGOPTIONS` have no effect.
-fn command(program: &str) -> Command {
-    let mut command = Command::new(program);
-    command.env_clear().stdin(Stdio::null()).kill_on_drop(true);
-    if let Some(path) = env::var_os("PATH") {
-        command.env("PATH", path);
-    }
-    command
-}
-
 /// The first line of `program --version`.
 async fn client_version(program: &str) -> Result<String, Error> {
     let failed = |reason: String| {
@@ -368,33 +356,13 @@ fn spawn<S: Source>(client: Client) -> Result<Child, Error> {
         .envs(client.env)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // The kernel sends the signal when the spawning thread exits, so spawn from a long-lived thread.
-    #[cfg(target_os = "linux")]
-    // SAFETY: the closure makes one prctl system call, which is async-signal-safe.
-    unsafe {
-        command.pre_exec(|| {
-            Ok(rustix::process::set_parent_process_death_signal(Some(
-                Signal::TERM,
-            ))?)
-        });
-    }
+    process::die_with_parent(&mut command);
     command.spawn().map_err(|error| {
         Error::new(
             Failure::Client,
             format!("cannot start {}: {error}", S::CLIENT),
         )
     })
-}
-
-/// Keeps the last [`STDERR_TAIL`] bytes of the client's standard error.
-async fn tail(mut stderr: ChildStderr) -> Vec<u8> {
-    let mut tail = Vec::new();
-    let mut buffer = [0; 4096];
-    while let Ok(n @ 1..) = stderr.read(&mut buffer).await {
-        tail.extend_from_slice(&buffer[..n]);
-        tail.drain(..tail.len().saturating_sub(STDERR_TAIL));
-    }
-    tail
 }
 
 /// Ends the backup sessions, then stops the client. See "Cancellation" in docs/database-safety.md.

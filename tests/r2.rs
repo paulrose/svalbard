@@ -18,7 +18,7 @@ use aws_sdk_s3::{Client, presigning::PresigningConfig, types::ChecksumMode};
 use common::{hex, staged, store};
 use sha2::{Digest, Sha256};
 use svalbard::{
-    config::{self, DestinationSettings, Settings, SourceSettings},
+    config::{self, DestinationSettings, Settings, SourceSettings, Target},
     staging::Run,
     storage::Failure,
 };
@@ -237,10 +237,11 @@ async fn cancellation_aborts_the_upload() {
 #[ignore = "needs R2: run scripts/test-r2.sh"]
 async fn bucket_outside_the_token_scope_is_access_denied() {
     let (dump, run) = staged(1 << 10);
-    let destination = config::Destination {
-        bucket: format!("svalbard-denied-{}", &run.id[..16]),
-        ..destination(&run)
+    let mut destination = destination(&run);
+    let Target::ObjectStore(bucket) = &mut destination.target else {
+        panic!("an R2 destination is an object store");
     };
+    bucket.bucket = format!("svalbard-denied-{}", &run.id[..16]);
     let error = store(&destination, &dump, &run, future::pending())
         .await
         .expect_err("the upload must fail");

@@ -4,6 +4,7 @@
 //! share: the names, the completion record, the deadline, cancellation and cleanup.
 
 mod s3;
+mod ssh;
 
 use std::{
     fmt, fs,
@@ -25,6 +26,7 @@ use crate::{
 };
 
 pub use s3::S3;
+pub use ssh::Ssh;
 
 /// The time for cleanup after an error.
 const CLEANUP: Duration = Duration::from_secs(30);
@@ -33,7 +35,10 @@ const CLEANUP: Duration = Duration::from_secs(30);
 // shortcut: the futures are not Send, so an upload runs on one thread. Return `impl Future + Send` to move it.
 #[allow(async_fn_in_trait)]
 pub trait Destination {
-    /// Uploads `file` to `key`. Fails unless the destination confirms the file's SHA-256.
+    /// Uploads `file` to `key`. Fails unless the destination confirms the file: S3 and R2 confirm
+    /// its checksum, and an SSH server confirms the writes and the size. The file appears under
+    /// `key` only when it is complete. A failure can still leave a complete file, for example
+    /// when the answer to the last request is lost.
     async fn put(&mut self, key: &str, file: &Staged<'_>) -> Result<(), Error>;
 
     /// Removes what an unfinished [`Destination::put`] to `key` left. Never removes a complete
@@ -68,6 +73,8 @@ pub struct Error {
 pub enum Failure {
     /// The destination refused the credentials or the request.
     AccessDenied,
+    /// The SSH server's host key is missing from the known hosts, or does not match.
+    HostKeyRejected,
     Upload,
     UploadTimeout,
     Cancelled,
