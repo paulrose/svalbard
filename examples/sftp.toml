@@ -1,0 +1,26 @@
+# Svalbard configuration example for an SSH server with SFTP.
+#
+# This file holds no secrets. Svalbard authenticates with an SSH agent (SSH_AUTH_SOCK) or with
+# an unencrypted key file, and checks the server against known_hosts. It never asks a question.
+# Set the database password in SVALBARD_SOURCE_PASSWORD.
+#
+# Validate it with: svalbard config check --config examples/sftp.toml
+
+[source]
+type = "postgresql"
+host = "db.example.com"
+database = "app"
+user = "backup"
+
+[destination]
+type = "sftp"
+host = "backup.example.com"
+port = 22
+user = "svalbard"
+# An existing absolute directory on the server.
+path = "/srv/backups"
+prefix = "app/"
+# Without identity_file, the SSH agent and the default keys.
+# identity_file = "/run/secrets/ssh-key"
+# Without known_hosts_file, ~/.ssh/known_hosts and /etc/ssh/ssh_known_hosts.
+# known_hosts_file = "/etc/svalbard/known_hosts"

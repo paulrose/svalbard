@@ -1,4 +1,5 @@
-# PostgreSQL and MySQL servers with TLS, the Floci S3 emulator, and the test runners.
+# PostgreSQL and MySQL servers with TLS, the Floci S3 emulator, an OpenSSH server, and the
+# test runners.
 # scripts/test-integration.sh runs `tests`, and scripts/test-r2.sh runs `r2`.
 # The servers publish no ports. Only the runner on the Compose network can reach them.
 # Nothing is built, and nothing is written to the host: the scripts remove the containers,
@@ -97,11 +98,56 @@ services:
       FLOCI_SERVICES_IAM_SEED_DEPLOYER_PRINCIPAL: "true"
       FLOCI_SERVICES_UI_ENABLED: "false"
 
+  # An OpenSSH server. It writes its host key, the client keys and the known_hosts files to the
+  # ssh-keys volume. `backup` has a shell, and `sftponly` can only use SFTP.
+  ssh:
+    image: alpine:3.24
+    volumes:
+      - ssh-keys:/keys
+    command:
+      - sh
+      - -ec
+      - |
+        apk add --quiet --no-progress openssh
+        ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
+        cd /keys
+        for key in other client stranger; do ssh-keygen -q -t ed25519 -N '' -f $$key; done
+        echo "* $$(cat /etc/ssh/ssh_host_ed25519_key.pub)" >known_hosts
+        echo "* $$(cat other.pub)" >known_hosts_wrong
+        : >known_hosts_empty
+        for user in backup sftponly; do
+          adduser -D -s /bin/sh $$user
+          # Alpine's sshd refuses key logins to locked accounts.
+          echo "$$user:*" | chpasswd -e
+          install -d -o $$user -m 700 /home/$$user/.ssh
+          install -o $$user -m 600 client.pub /home/$$user/.ssh/authorized_keys
+        done
+        install -d -o backup /srv/backups
+        install -d /srv/readonly
+        for name in 'with space' "it's" '$$(touch /tmp/pwned)' '*?[x]' 'ünïcode'; do
+          install -d -o backup "/srv/backups/$$name"
+        done
+        cat >>/etc/ssh/sshd_config <<'CONF'
+        HostKey /etc/ssh/ssh_host_ed25519_key
+        PasswordAuthentication no
+        # The tests connect often and in parallel, and some fail on purpose.
+        MaxStartups 100
+        PerSourcePenalties no
+        Match User sftponly
+          ForceCommand internal-sftp
+        CONF
+        exec /usr/sbin/sshd -D -e
+    healthcheck:
+      test: [CMD, nc, -z, 127.0.0.1, "22"]
+      interval: 1s
+      retries: 120
+
   tests:
     <<: *runner
     volumes:
       - ../..:/svalbard:ro
       - certs:/certs:ro
+      - ssh-keys:/keys:ro
     environment:
       POSTGRESQL_VERSION: ${POSTGRESQL_VERSION:-18}
       # The build stays in the container.
@@ -111,6 +157,8 @@ services:
       SVALBARD_TEST_MYSQL: mysql://root:mysql@mysql:3306/mysql
       SVALBARD_TEST_MYSQL_CA: /certs/ca.crt
       SVALBARD_TEST_S3_ENDPOINT: http://floci:4566
+      SVALBARD_TEST_SSH_HOST: ssh
+      SVALBARD_TEST_SSH_KEYS: /keys
       # The emulator's public test keys.
       AWS_ACCESS_KEY_ID: floci
       AWS_SECRET_ACCESS_KEY: floci
@@ -118,6 +166,8 @@ services:
       AWS_EC2_METADATA_DISABLED: "true"
     depends_on:
       floci:
+        condition: service_healthy
+      ssh:
         condition: service_healthy
       postgresql:
         condition: service_healthy
@@ -139,3 +189,4 @@ services:
 
 volumes:
   certs:
+  ssh-keys:
