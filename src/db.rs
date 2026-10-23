@@ -29,6 +29,8 @@ pub trait Source {
     const CLIENT: &'static str;
     /// The dump format, which selects the restore tool.
     const FORMAT: &'static str;
+    /// The file name extension for the dump, without the dot.
+    const EXTENSION: &'static str;
 
     /// Opens the control connection and checks the server, the privileges and the source
     /// conditions. `client_version` is the first line of `CLIENT --version`.
@@ -82,6 +84,7 @@ pub enum Wait {
 pub struct Dump {
     pub path: PathBuf,
     pub format: &'static str,
+    pub extension: &'static str,
     pub client_version: String,
     pub server_version: String,
     pub size: u64,

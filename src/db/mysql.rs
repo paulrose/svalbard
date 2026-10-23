@@ -183,6 +183,7 @@ impl Mysql {
 impl Source for Mysql {
     const CLIENT: &'static str = "mysqldump";
     const FORMAT: &'static str = "mysqldump-sql";
+    const EXTENSION: &'static str = "sql";
 
     async fn preflight(&mut self, client_version: &str) -> Result<String, String> {
         let client = client_series(client_version)

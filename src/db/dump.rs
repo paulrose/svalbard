@@ -129,6 +129,7 @@ async fn dump_to<S: Source>(
     Ok(Dump {
         path: path.to_owned(),
         format: S::FORMAT,
+        extension: S::EXTENSION,
         client_version,
         server_version,
         size,

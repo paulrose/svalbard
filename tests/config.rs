@@ -274,3 +274,46 @@ fn source_type_is_postgresql_or_mysql() {
     let (_, _, stderr) = check(&["--config", &file, "--source-type", "mariadb"], &[]);
     assert!(stderr.contains("Use `postgresql` or `mysql`"), "{stderr}");
 }
+
+#[test]
+fn destination_endpoint_and_upload_timeout_are_checked() {
+    let file = config_file("destination", BASE);
+
+    for (args, error) in [
+        (
+            vec![
+                "--destination-endpoint",
+                "https://acct.r2.cloudflarestorage.com",
+            ],
+            None,
+        ),
+        (vec!["--destination-endpoint", "http://floci:4566"], None),
+        (
+            vec!["--destination-endpoint", "s3.example.com"],
+            Some("Use an http:// or https:// URL"),
+        ),
+        (
+            vec![
+                "--destination-endpoint",
+                &format!("key:{SECRET}@s3.example.com"),
+            ],
+            Some("must not contain credentials"),
+        ),
+        (vec!["--destination-upload-timeout", "24h"], None),
+        (
+            vec!["--destination-upload-timeout", "25h"],
+            Some("destination.upload_timeout must be from 1min to 24h"),
+        ),
+    ] {
+        let (code, _, stderr) = check(&[&["--config", file.as_str()], &args[..]].concat(), &[]);
+
+        match error {
+            None => assert_eq!(code, Some(0), "{args:?}: {stderr}"),
+            Some(error) => {
+                assert_eq!(code, Some(3), "{args:?}");
+                assert!(stderr.contains(error), "{args:?}: {stderr}");
+                assert!(!stderr.contains(SECRET), "{args:?}: {stderr}");
+            }
+        }
+    }
+}

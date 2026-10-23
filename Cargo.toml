@@ -2,12 +2,15 @@
 name = "svalbard"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.93.1"
+rust-version = "1.99.1"
 description = "Adapter-driven database backup CLI"
 license = "MIT"
 repository = "https://github.com/paulrose/svalbard"
 
 [dependencies]
+aws-config = { version = "1.13.0", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process"] }
+aws-sdk-s3 = { version = "1.155.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-types = "1.9.0"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 mysql_async = { version = "0.37.0", default-features = false, features = ["minimal-rust", "rustls-tls", "aws-lc-rs", "tls12"] }
 openssl-probe = "0.2.1"
@@ -21,3 +24,6 @@ tokio = { version = "1.54.1", features = ["rt", "macros", "process", "time", "io
 tokio-postgres = "0.7.18"
 tokio-postgres-rustls = "0.14.0"
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["net", "sync"] }
