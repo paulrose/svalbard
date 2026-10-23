@@ -6,8 +6,7 @@
 mod common;
 
 use std::{
-    env, future,
-    process::Command,
+    future,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -15,12 +14,8 @@ use std::{
     time::Duration,
 };
 
-use aws_sdk_s3::{
-    Client,
-    config::{BehaviorVersion, Credentials, Region},
-    types::ChecksumMode,
-};
-use common::{Fault, hex, proxy, staged, store};
+use aws_sdk_s3::types::ChecksumMode;
+use common::{Fault, floci::*, hex, proxy, staged, store};
 use sha2::{Digest, Sha256};
 use svalbard::{
     config::{self, ObjectStore, Provider, Target},
@@ -31,50 +26,12 @@ use tokio::{
     net::TcpListener,
 };
 
-fn endpoint() -> String {
-    env::var("SVALBARD_TEST_S3_ENDPOINT")
-        .expect("SVALBARD_TEST_S3_ENDPOINT must be set: run scripts/test-integration.sh")
-}
-
 /// The host and port of Floci, for the test proxy.
 fn upstream() -> String {
     endpoint()
         .trim_start_matches("http://")
         .trim_end_matches('/')
         .to_owned()
-}
-
-/// A client with the setup key, which Floci never checks.
-fn setup() -> Client {
-    let config = aws_sdk_s3::Config::builder()
-        .behavior_version(BehaviorVersion::latest())
-        .region(Region::new("us-east-1"))
-        .endpoint_url(endpoint())
-        .force_path_style(true)
-        .credentials_provider(Credentials::new("test", "test", None, None, "test"))
-        .build();
-    Client::from_conf(config)
-}
-
-/// A new bucket, with a policy that denies `action` on `resource` to every principal.
-async fn bucket(name: &str, deny: Option<(&str, &str)>) -> String {
-    let bucket = format!("svalbard-{name}");
-    let client = setup();
-    client.create_bucket().bucket(&bucket).send().await.unwrap();
-    if let Some((action, resource)) = deny {
-        let policy = format!(
-            r#"{{"Version":"2012-10-17","Statement":[{{"Effect":"Deny","Principal":"*",
-              "Action":"{action}","Resource":"arn:aws:s3:::{bucket}/{resource}"}}]}}"#
-        );
-        client
-            .put_bucket_policy()
-            .bucket(&bucket)
-            .policy(policy)
-            .send()
-            .await
-            .unwrap();
-    }
-    bucket
 }
 
 fn destination(bucket: &str, endpoint: String, upload_timeout: Duration) -> config::Destination {
@@ -88,52 +45,6 @@ fn destination(bucket: &str, endpoint: String, upload_timeout: Duration) -> conf
         prefix: "app/".to_owned(),
         upload_timeout,
     }
-}
-
-/// The keys of the objects in `bucket`.
-async fn objects(bucket: &str) -> Vec<String> {
-    let output = setup()
-        .list_objects_v2()
-        .bucket(bucket)
-        .send()
-        .await
-        .unwrap();
-    output
-        .contents()
-        .iter()
-        .filter_map(|object| object.key().map(str::to_owned))
-        .collect()
-}
-
-/// The keys of the unfinished multipart uploads in `bucket`.
-async fn uploads(bucket: &str) -> Vec<String> {
-    let output = setup()
-        .list_multipart_uploads()
-        .bucket(bucket)
-        .send()
-        .await
-        .unwrap();
-    output
-        .uploads()
-        .iter()
-        .filter_map(|upload| upload.key().map(str::to_owned))
-        .collect()
-}
-
-/// Downloads an object with curl, independently of the AWS SDK.
-fn download(bucket: &str, key: &str) -> Vec<u8> {
-    let output = Command::new("curl")
-        .args(["--silent", "--show-error", "--fail"])
-        .args(["--aws-sigv4", "aws:amz:us-east-1:s3", "--user", "test:test"])
-        .arg(format!("{}/{bucket}/{key}", endpoint()))
-        .output()
-        .expect("curl must start");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
 }
 
 #[tokio::test]

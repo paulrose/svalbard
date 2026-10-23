@@ -4,30 +4,16 @@
 
 mod common;
 
-use std::{
-    env, future,
-    path::PathBuf,
-    process::{Command, Output},
-    time::Duration,
-};
+use std::{future, process::Command, time::Duration};
 
-use common::{Fault, hex, proxy, staged, store};
+use common::{Fault, hex, proxy, ssh::*, staged, store};
 use sha2::{Digest, Sha256};
 use svalbard::{
     config::{self, SshMode, Target},
-    staging::Run,
     storage::Failure,
 };
 
 const MODES: [SshMode; 2] = [SshMode::Sftp, SshMode::Scp];
-
-fn var(name: &str) -> String {
-    env::var(name).unwrap_or_else(|_| panic!("{name} must be set: run scripts/test-integration.sh"))
-}
-
-fn key(name: &str) -> PathBuf {
-    PathBuf::from(var("SVALBARD_TEST_SSH_KEYS")).join(name)
-}
 
 /// `backup` on the server, with the authorized key and the right host key.
 fn server(mode: SshMode, path: &str) -> config::Ssh {
@@ -44,8 +30,7 @@ fn server(mode: SshMode, path: &str) -> config::Ssh {
 
 /// The same server, through a test proxy.
 async fn proxied(mode: SshMode, path: &str, fault: Fault) -> (config::Ssh, common::Proxy) {
-    let upstream = format!("{}:22", var("SVALBARD_TEST_SSH_HOST"));
-    let proxy = proxy(&upstream, fault).await;
+    let proxy = proxy(&upstream(), fault).await;
     let server = config::Ssh {
         host: "127.0.0.1".to_owned(),
         port: proxy.address.port(),
@@ -62,79 +47,12 @@ fn destination(server: config::Ssh) -> config::Destination {
     }
 }
 
-/// Runs `script` in the shell of `backup`, independently of Svalbard.
-fn remote(script: &str) -> Output {
-    Command::new("ssh")
-        .args([
-            "-F",
-            "none",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "IdentitiesOnly=yes",
-        ])
-        .args(["-o", "GlobalKnownHostsFile=/dev/null", "-o"])
-        .arg(format!(
-            "UserKnownHostsFile={}",
-            key("known_hosts").display()
-        ))
-        .arg("-i")
-        .arg(key("client"))
-        .arg(format!("backup@{}", var("SVALBARD_TEST_SSH_HOST")))
-        .args(["--", script])
-        .output()
-        .expect("ssh must start")
-}
-
-fn quote(path: &str) -> String {
-    format!("'{}'", path.replace('\'', r"'\''"))
-}
-
-/// Runs `script` and returns its standard output.
-fn shell(script: &str) -> String {
-    let output = remote(script);
-    assert!(
-        output.status.success(),
-        "{script}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-/// The bytes of a remote file.
-fn download(path: &str) -> Vec<u8> {
-    let output = remote(&format!("cat -- {}", quote(path)));
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output.stdout
-}
-
-/// A new directory for one test, under `parent`.
-fn directory(parent: &str, run: &Run) -> String {
-    let dir = format!("{parent}/{}", run.id);
-    shell(&format!("mkdir -- {}", quote(&dir)));
-    dir
-}
-
-/// The names in `dir`, hidden ones included.
-fn files(dir: &str) -> Vec<String> {
-    let mut names: Vec<_> = shell(&format!("ls -A -- {}", quote(dir)))
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    names.sort();
-    names
-}
-
 #[tokio::test]
 #[ignore = "needs SSH: run scripts/test-integration.sh"]
 async fn dump_and_record_round_trip() {
     for mode in MODES {
         let (dump, run) = staged(1 << 20);
-        let dir = directory("/srv/backups", &run);
+        let dir = directory("/srv/backups", &run.id);
         let destination = destination(server(mode, &dir));
 
         // A second upload of the same run replaces the files.
@@ -177,7 +95,7 @@ async fn agent_key_authenticates() {
         .unwrap();
     assert!(added.success());
     let (dump, run) = staged(1 << 10);
-    let dir = directory("/srv/backups", &run);
+    let dir = directory("/srv/backups", &run.id);
     let server = config::Ssh {
         identity_file: None,
         ..server(SshMode::Sftp, &dir)
@@ -264,7 +182,7 @@ async fn unusual_paths_stay_literal() {
             "ünïcode",
         ] {
             let (dump, run) = staged(1 << 10);
-            let dir = directory(&format!("/srv/backups/{name}"), &run);
+            let dir = directory(&format!("/srv/backups/{name}"), &run.id);
             store(
                 &destination(server(mode, &dir)),
                 &dump,
@@ -286,7 +204,7 @@ async fn unusual_paths_stay_literal() {
 async fn cancellation_removes_the_partial_file() {
     for mode in MODES {
         let (dump, run) = staged(32 << 20);
-        let dir = directory("/srv/backups", &run);
+        let dir = directory("/srv/backups", &run.id);
         let (server, proxy) = proxied(mode, &dir, Fault::StallAfter(8 << 20)).await;
         let error = store(&destination(server), &dump, &run, proxy.stalled.notified())
             .await
@@ -303,7 +221,7 @@ async fn cancellation_removes_the_partial_file() {
 async fn disconnect_fails_and_removes_the_partial_file() {
     for mode in MODES {
         let (dump, run) = staged(32 << 20);
-        let dir = directory("/srv/backups", &run);
+        let dir = directory("/srv/backups", &run.id);
         let (server, _proxy) = proxied(mode, &dir, Fault::CloseAfter(8 << 20)).await;
         let error = store(&destination(server), &dump, &run, future::pending())
             .await
@@ -320,7 +238,7 @@ async fn disconnect_fails_and_removes_the_partial_file() {
 async fn failed_cleanup_reports_the_partial_file() {
     for mode in MODES {
         let (dump, run) = staged(32 << 20);
-        let dir = directory("/srv/backups", &run);
+        let dir = directory("/srv/backups", &run.id);
         let (server, proxy) = proxied(mode, &dir, Fault::StallThenRefuse(8 << 20)).await;
         let error = store(&destination(server), &dump, &run, proxy.stalled.notified())
             .await

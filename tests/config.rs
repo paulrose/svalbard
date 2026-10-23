@@ -420,3 +420,25 @@ fn expect(file: &str, args: &[&str], error: Option<&str>) {
         }
     }
 }
+
+#[test]
+fn staging_dir_must_be_a_directory() {
+    let file = config_file("staging", BASE);
+
+    for (args, error) in [
+        (
+            vec!["--safety-staging-dir", env!("CARGO_TARGET_TMPDIR")],
+            None,
+        ),
+        (
+            vec!["--safety-staging-dir", "/nonexistent/staging"],
+            Some("safety.staging_dir /nonexistent/staging cannot be opened"),
+        ),
+        (
+            vec!["--safety-staging-dir", &file],
+            Some("is not a directory."),
+        ),
+    ] {
+        expect(&file, &args, error);
+    }
+}

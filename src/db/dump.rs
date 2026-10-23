@@ -355,7 +355,9 @@ fn spawn<S: Source>(client: Client) -> Result<Child, Error> {
         .args(client.args)
         .envs(client.env)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // A terminal's Ctrl-C reaches only Svalbard, which ends the backup sessions first.
+        .process_group(0);
     process::die_with_parent(&mut command);
     command.spawn().map_err(|error| {
         Error::new(
