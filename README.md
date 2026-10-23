@@ -1,7 +1,7 @@
 # Svalbard
 
 Svalbard is an open-source Rust CLI for database backups.
-This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3 or an S3-compatible service.
+This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3, Cloudflare R2 or another S3-compatible service.
 
 ## Build and run
 
@@ -45,11 +45,11 @@ Unknown keys, empty values and invalid values are errors.
 | `source.password_file` | None | Path to a file that holds the password |
 | `source.tls` | `verify-full` | `verify-full` or `disable` |
 | `source.tls_ca_file` | The system trust store | Path to a PEM file with the CA certificates |
-| `destination.type` | Required | `s3` |
+| `destination.type` | Required | `s3` or `r2` |
 | `destination.bucket` | Required | Bucket name |
 | `destination.prefix` | Empty | Prefix for object keys |
-| `destination.region` | From the AWS configuration | AWS Region |
-| `destination.endpoint` | AWS | URL of an S3-compatible service, such as `https://s3.example.com` |
+| `destination.region` | From the AWS configuration, `auto` for R2 | AWS Region |
+| `destination.endpoint` | AWS, required for R2 | URL of an S3-compatible service, such as `https://s3.example.com` |
 | `destination.upload_timeout` | `1h` | `1min` to `24h` |
 | `safety.lock_timeout` | `10s` | `1s` to `5min` |
 | `safety.contention_timeout` | `2s` | `1s` to `60s` |
@@ -70,6 +70,7 @@ The configuration file and flags never hold secrets. The file rejects keys such 
 - Set the database password in `SVALBARD_SOURCE_PASSWORD`, or set `source.password_file` to a mounted secret file. Set one of them, not both.
 - If the database needs no password, set neither. An empty `SVALBARD_SOURCE_PASSWORD` is an error, because CI systems give an empty value for a missing secret.
 - For S3, Svalbard uses the AWS credential chain: environment variables such as `AWS_ACCESS_KEY_ID`, a shared AWS profile, a web identity token from CI, or an instance or container role. Static keys are not necessary.
+- For R2, Svalbard reads only `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. It never sends AWS credentials to Cloudflare.
 
 `config check` does not read the password. It checks that the password file opens.
 Secret values do not appear in errors or in the JSON result.
@@ -109,6 +110,28 @@ The S3 credentials need these permissions on the prefix:
 
 Add a lifecycle rule with `AbortIncompleteMultipartUpload` to the bucket. It removes the parts of an upload that Svalbard could not abort, for example after `SIGKILL`.
 
+#### Cloudflare R2
+
+```toml
+[destination]
+type = "r2"
+bucket = "example-backups"
+prefix = "app/"
+endpoint = "https://<account-id>.r2.cloudflarestorage.com"
+```
+
+Use the S3 API endpoint of the account, without the bucket. For a bucket in a jurisdiction, the endpoint includes it, such as `https://<account-id>.eu.r2.cloudflarestorage.com`.
+The region is `auto`. [`examples/r2.toml`](examples/r2.toml) is a complete example.
+
+Create an R2 API token with Object Read & Write on the bucket.
+Set its Access Key ID in `AWS_ACCESS_KEY_ID` and its Secret Access Key in `AWS_SECRET_ACCESS_KEY`.
+
+R2 checks a small dump against its SHA-256, as S3 does. For the parts of a larger dump, R2 checks MD5 instead of SHA-256.
+Svalbard then checks the MD5 ETag of the complete object, and that the parts form the staged file.
+The record and `x-amz-meta-sha256` hold the SHA-256 for every dump.
+
+R2 aborts incomplete multipart uploads after 7 days by default.
+
 ### Output and exit codes
 
 Without `--json`, a valid configuration prints `Configuration is valid.` on stdout.
@@ -132,7 +155,7 @@ cargo test --locked
 ```
 
 The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for each pull request and each push to `main`.
-It uses the toolchain in `rust-toolchain.toml`. It needs no credentials or paid services.
+It uses the toolchain in `rust-toolchain.toml`. The `check` and `integration` jobs need no credentials or paid services.
 
 The PostgreSQL, MySQL and S3 tests run in Docker, which is their only requirement.
 [`scripts/test-integration.sh`](scripts/test-integration.sh) starts both database servers with TLS and the [Floci](https://github.com/floci-io/floci) S3 emulator on a private network, and a runner container that installs Rust and the native clients.
@@ -145,6 +168,18 @@ scripts/test-integration.sh 15 9.7
 ```
 
 CI runs these tests against PostgreSQL 15, 16, 17 and 18, MySQL 8.4 and 9.7, and Floci.
+
+The R2 tests need a real R2 bucket. [`scripts/test-r2.sh`](scripts/test-r2.sh) runs them in Docker.
+Set `SVALBARD_TEST_R2_ENDPOINT` and `SVALBARD_TEST_R2_BUCKET`, and the keys of an R2 API token with Object Read & Write on the bucket in `SVALBARD_TEST_R2_ACCESS_KEY_ID` and `SVALBARD_TEST_R2_SECRET_ACCESS_KEY`.
+The tests write under `svalbard-test/` and remove what they wrote.
+Give the bucket a lifecycle rule that deletes objects under `svalbard-test/` after a day, for tests that fail before their cleanup.
+
+```sh
+scripts/test-r2.sh
+```
+
+The `r2` CI job runs these tests in the `svalbard-ci` bucket for pull requests from this repository, for pushes to `main`, and on demand.
+It reads the keys from the repository secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, and the endpoint and bucket from the variables `R2_ENDPOINT` and `R2_BUCKET`.
 
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 

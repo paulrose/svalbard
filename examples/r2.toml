@@ -1,0 +1,22 @@
+# Svalbard configuration example for Cloudflare R2.
+#
+# This file holds no secrets. Create an R2 API token with Object Read & Write on the bucket.
+# Set its Access Key ID in AWS_ACCESS_KEY_ID and its Secret Access Key in AWS_SECRET_ACCESS_KEY.
+# Set the database password in SVALBARD_SOURCE_PASSWORD.
+#
+# Validate it with: svalbard config check --config examples/r2.toml
+
+[source]
+type = "postgresql"
+host = "db.example.com"
+database = "app"
+user = "backup"
+
+[destination]
+type = "r2"
+bucket = "example-backups"
+prefix = "app/"
+# The S3 API endpoint of the account, without the bucket. For a bucket in the EU jurisdiction:
+# https://<account-id>.eu.r2.cloudflarestorage.com
+endpoint = "https://<account-id>.r2.cloudflarestorage.com"
+# The region defaults to "auto".

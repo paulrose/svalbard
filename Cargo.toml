@@ -12,6 +12,7 @@ aws-config = { version = "1.13.0", default-features = false, features = ["defaul
 aws-sdk-s3 = { version = "1.155.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-types = "1.9.0"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+md-5 = "0.11.0"
 mysql_async = { version = "0.37.0", default-features = false, features = ["minimal-rust", "rustls-tls", "aws-lc-rs", "tls12"] }
 openssl-probe = "0.2.1"
 rustix = { version = "1.1.5", features = ["fs", "process"] }

@@ -44,13 +44,15 @@ fn check(args: &[&str], env: &[(&str, &str)]) -> (Option<i32>, String, String) {
 }
 
 #[test]
-fn documented_example_is_valid() {
-    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/svalbard.toml");
-    let (code, stdout, stderr) = check(&["--config", example], &[]);
+fn documented_examples_are_valid() {
+    for example in ["svalbard.toml", "r2.toml"] {
+        let path = format!("{}/examples/{example}", env!("CARGO_MANIFEST_DIR"));
+        let (code, stdout, stderr) = check(&["--config", &path], &[]);
 
-    assert_eq!(code, Some(0), "{stderr}");
-    assert_eq!(stdout, "Configuration is valid.\n");
-    assert!(stderr.is_empty());
+        assert_eq!(code, Some(0), "{example}: {stderr}");
+        assert_eq!(stdout, "Configuration is valid.\n");
+        assert!(stderr.is_empty());
+    }
 }
 
 #[test]
@@ -276,15 +278,41 @@ fn source_type_is_postgresql_or_mysql() {
 }
 
 #[test]
-fn destination_endpoint_and_upload_timeout_are_checked() {
+fn destination_type_endpoint_and_upload_timeout_are_checked() {
     let file = config_file("destination", BASE);
+    let r2 = |endpoint| {
+        vec![
+            "--destination-type",
+            "r2",
+            "--destination-endpoint",
+            endpoint,
+        ]
+    };
 
     for (args, error) in [
+        (
+            vec!["--destination-type", "gcs"],
+            Some("destination.type is `gcs`. Use `s3` or `r2`."),
+        ),
+        (
+            vec!["--destination-type", "r2"],
+            Some("destination.endpoint is required"),
+        ),
+        (r2("https://acct.r2.cloudflarestorage.com"), None),
+        (r2("https://acct.eu.r2.cloudflarestorage.com/"), None),
+        (
+            r2("https://acct.r2.cloudflarestorage.com/backups"),
+            Some("Remove the path: the bucket goes in destination.bucket."),
+        ),
         (
             vec![
                 "--destination-endpoint",
                 "https://acct.r2.cloudflarestorage.com",
             ],
+            Some("a Cloudflare R2 endpoint. Set destination.type to `r2`."),
+        ),
+        (
+            vec!["--destination-endpoint", "https://s3.example.com"],
             None,
         ),
         (vec!["--destination-endpoint", "http://floci:4566"], None),

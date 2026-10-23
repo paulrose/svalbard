@@ -89,12 +89,22 @@ pub enum Tls {
 
 #[derive(Debug)]
 pub struct Destination {
+    pub provider: Provider,
     pub bucket: String,
     pub prefix: String,
+    /// `auto` for R2.
     pub region: Option<String>,
-    /// An S3-compatible endpoint instead of AWS, such as `https://s3.example.com`.
+    /// An S3-compatible endpoint instead of AWS, such as `https://s3.example.com`. Always set for
+    /// R2.
     pub endpoint: Option<String>,
     pub upload_timeout: Duration,
+}
+
+/// The storage service of the destination. Both use the S3 API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provider {
+    S3,
+    R2,
 }
 
 #[derive(Debug)]
@@ -279,11 +289,19 @@ pub fn load(
         Kind::Postgresql => "5432",
         Kind::Mysql => "3306",
     };
-    expect_type(
+    let provider = match required(
         "destination.type",
         pick(&destination.r#type, &file_destination.r#type),
-        "s3",
-    )?;
+    )?
+    .as_str()
+    {
+        "s3" => Provider::S3,
+        "r2" => Provider::R2,
+        value => {
+            return Err(format!("destination.type is `{value}`. Use `s3` or `r2`."));
+        }
+    };
+    let endpoint_value = pick(&destination.endpoint, &file_destination.endpoint);
 
     Ok(Config {
         source: Source {
@@ -311,6 +329,7 @@ pub fn load(
             )?,
         },
         destination: Destination {
+            provider,
             bucket: required(
                 "destination.bucket",
                 pick(&destination.bucket, &file_destination.bucket),
@@ -321,11 +340,15 @@ pub fn load(
             region: optional(
                 "destination.region",
                 pick(&destination.region, &file_destination.region),
+            )?
+            .or((provider == Provider::R2).then(|| "auto".to_owned())),
+            endpoint: endpoint(
+                provider,
+                match provider {
+                    Provider::S3 => optional("destination.endpoint", endpoint_value)?,
+                    Provider::R2 => Some(required("destination.endpoint", endpoint_value)?),
+                },
             )?,
-            endpoint: endpoint(optional(
-                "destination.endpoint",
-                pick(&destination.endpoint, &file_destination.endpoint),
-            )?)?,
             upload_timeout: Duration::from_secs(limit(
                 "destination.upload_timeout",
                 pick(
@@ -407,13 +430,6 @@ fn optional(key: &str, value: Option<&str>) -> Result<Option<String>, String> {
     }
 }
 
-fn expect_type(key: &str, value: Option<&str>, expected: &str) -> Result<(), String> {
-    match required(key, value)? {
-        value if value == expected => Ok(()),
-        value => Err(format!("{key} is `{value}`. Use `{expected}`.")),
-    }
-}
-
 fn port(value: &str) -> Result<u16, String> {
     match value.parse() {
         Ok(port) if port != 0 => Ok(port),
@@ -436,17 +452,34 @@ fn password(env: Option<&OsStr>, file: Option<&Path>) -> Result<Password, String
 }
 
 /// Checks the scheme. A URL with `user:password@` would put a secret in the configuration.
-fn endpoint(url: Option<String>) -> Result<Option<String>, String> {
+/// An R2 endpoint has no path: the R2 dashboard shows bucket URLs, and the bucket would appear
+/// twice in each request.
+fn endpoint(provider: Provider, url: Option<String>) -> Result<Option<String>, String> {
     let Some(url) = url else {
         return Ok(None);
     };
-    // Checked first, so that the next error never repeats a secret.
+    // Checked first, so that the next errors never repeat a secret.
     if url.contains('@') {
         return Err("destination.endpoint must not contain credentials.".to_owned());
     }
-    if !url.starts_with("https://") && !url.starts_with("http://") {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
         return Err(format!(
             "destination.endpoint is `{url}`. Use an http:// or https:// URL."
+        ));
+    };
+    if provider == Provider::R2 && rest.trim_end_matches('/').contains(['/', '?', '#']) {
+        return Err(format!(
+            "destination.endpoint is `{url}`. Remove the path: the bucket goes in destination.bucket."
+        ));
+    }
+    // As `s3`, R2 would reject every multipart upload, so only small dumps would succeed.
+    let host = rest.split(['/', '?', '#', ':']).next().unwrap_or_default();
+    if provider == Provider::S3 && host.ends_with(".r2.cloudflarestorage.com") {
+        return Err(format!(
+            "destination.endpoint is `{url}`, a Cloudflare R2 endpoint. Set destination.type to `r2`."
         ));
     }
     Ok(Some(url))

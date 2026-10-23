@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -43,3 +44,20 @@ jobs:
         with:
           persist-credentials: false
       - run: scripts/test-integration.sh "$POSTGRESQL" "$MYSQL"
+
+  # Real Cloudflare R2, in the svalbard-ci bucket. GitHub gives no secrets to pull requests
+  # from forks, so they skip this job.
+  r2:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/test-r2.sh
+        env:
+          SVALBARD_TEST_R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          SVALBARD_TEST_R2_BUCKET: ${{ vars.R2_BUCKET }}
+          SVALBARD_TEST_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          SVALBARD_TEST_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
