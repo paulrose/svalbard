@@ -3,11 +3,11 @@
 //! Svalbard signs with the `floci` key from the environment, so bucket policies apply to it.
 //! The setup uses the `test` key, which Floci never checks.
 
+mod common;
+
 use std::{
-    env, fs,
-    future::{self, Future},
+    env, future,
     net::SocketAddr,
-    path::Path,
     process::Command,
     sync::{
         Arc,
@@ -21,12 +21,11 @@ use aws_sdk_s3::{
     config::{BehaviorVersion, Credentials, Region},
     types::ChecksumMode,
 };
+use common::{hex, staged, store};
 use sha2::{Digest, Sha256};
 use svalbard::{
-    config,
-    db::Dump,
-    staging::Run,
-    storage::{self, Error, Failure, S3, Stored},
+    config::{self, Provider},
+    storage::Failure,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -74,52 +73,13 @@ async fn bucket(name: &str, deny: Option<(&str, &str)>) -> String {
 
 fn destination(bucket: &str, endpoint: String, upload_timeout: Duration) -> config::Destination {
     config::Destination {
+        provider: Provider::S3,
         bucket: bucket.to_owned(),
         prefix: "app/".to_owned(),
         region: None,
         endpoint: Some(endpoint),
         upload_timeout,
     }
-}
-
-/// A staged dump of `size` bytes in a new run directory.
-fn staged(size: usize) -> (Dump, Run) {
-    let run = Run::create(Path::new(env!("CARGO_TARGET_TMPDIR"))).unwrap();
-    let path = run.dir.join("dump");
-    let bytes: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
-    fs::write(&path, &bytes).unwrap();
-    let dump = Dump {
-        path,
-        format: "test",
-        extension: "test",
-        client_version: "client 1.0".to_owned(),
-        server_version: "server 1.0".to_owned(),
-        size: size as u64,
-        sha256: hex(&Sha256::digest(&bytes)),
-    };
-    (dump, run)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-async fn store(
-    destination: &config::Destination,
-    dump: &Dump,
-    run: &Run,
-    cancel: impl Future<Output = ()>,
-) -> Result<Stored, Error> {
-    let mut s3 = S3::new(destination).await;
-    storage::store(
-        &mut s3,
-        &destination.prefix,
-        dump,
-        run,
-        destination.upload_timeout,
-        cancel,
-    )
-    .await
 }
 
 /// The keys of the objects in `bucket`.

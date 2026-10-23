@@ -2120,6 +2120,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws-smithy-types",
  "clap",
+ "md-5",
  "mysql_async",
  "openssl-probe",
  "rustix",

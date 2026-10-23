@@ -1,9 +1,15 @@
-# PostgreSQL and MySQL servers with TLS, the Floci S3 emulator, and the test runner.
-# See scripts/test-integration.sh.
+# PostgreSQL and MySQL servers with TLS, the Floci S3 emulator, and the test runners.
+# scripts/test-integration.sh runs `tests`, and scripts/test-r2.sh runs `r2`.
 # The servers publish no ports. Only the runner on the Compose network can reach them.
-# Nothing is built, and nothing is written to the host: the script removes the containers,
-# the volumes and the images that it pulled.
+# Nothing is built, and nothing is written to the host: the scripts remove the containers,
+# the volumes and the images that they pulled.
 name: svalbard-tests
+
+# The stock MySQL image becomes the runner. See runner.sh.
+x-runner: &runner
+  image: mysql:${MYSQL_SERIES:-8.4}
+  entrypoint: [bash, /svalbard/tests/docker/runner.sh]
+  working_dir: /svalbard
 
 services:
   # A test CA and a server certificate for both servers.
@@ -92,9 +98,7 @@ services:
       FLOCI_SERVICES_UI_ENABLED: "false"
 
   tests:
-    image: mysql:${MYSQL_SERIES:-8.4}
-    entrypoint: [bash, /svalbard/tests/docker/runner.sh]
-    working_dir: /svalbard
+    <<: *runner
     volumes:
       - ../..:/svalbard:ro
       - certs:/certs:ro
@@ -119,6 +123,19 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
+
+  r2:
+    <<: *runner
+    volumes:
+      - ../..:/svalbard:ro
+    environment:
+      - POSTGRESQL_VERSION=${POSTGRESQL_VERSION:-18}
+      - CARGO_TARGET_DIR=/target
+      # Names only: the values come from scripts/test-r2.sh, never from arguments.
+      - SVALBARD_TEST_R2_ENDPOINT
+      - SVALBARD_TEST_R2_BUCKET
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
 
 volumes:
   certs:

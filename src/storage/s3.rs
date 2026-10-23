@@ -1,8 +1,11 @@
-//! Amazon S3 and S3-compatible storage. See "Storage" in README.md.
+//! Amazon S3 and S3-compatible storage, such as Cloudflare R2. See "Storage" in README.md.
 
 use std::time::Duration;
 
-use aws_config::{BehaviorVersion, Region, retry::RetryConfig, timeout::TimeoutConfig};
+use aws_config::{
+    BehaviorVersion, Region, environment::EnvironmentVariableCredentialsProvider,
+    retry::RetryConfig, timeout::TimeoutConfig,
+};
 use aws_sdk_s3::{
     Client,
     config::http::HttpResponse,
@@ -11,11 +14,12 @@ use aws_sdk_s3::{
     types::{ChecksumAlgorithm, CompletedMultipartUpload, CompletedPart},
 };
 use aws_smithy_types::base64;
+use md5::Md5;
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncReadExt};
 
 use super::{Destination, Error, Failure, Staged};
-use crate::config;
+use crate::config::{self, Provider};
 
 /// The smallest part of a multipart upload. Smaller files take one request.
 const PART_SIZE: u64 = 64 << 20;
@@ -24,9 +28,11 @@ const MAX_PARTS: u64 = 10_000;
 /// The buffer for reading the staged file.
 const BUFFER: usize = 1 << 20;
 
-/// An S3 bucket. The credentials come from the AWS credential chain.
+/// An S3 bucket. The credentials come from the AWS credential chain, or for R2 only from
+/// `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 pub struct S3 {
     client: Client,
+    provider: Provider,
     bucket: String,
     /// The multipart upload in progress: its key, and its ID once S3 returned one.
     pending: Option<(String, Option<String>)>,
@@ -49,12 +55,17 @@ impl S3 {
         if let Some(region) = &destination.region {
             loader = loader.region(Region::new(region.clone()));
         }
+        if destination.provider == Provider::R2 {
+            // The rest of the AWS chain could send AWS credentials to Cloudflare.
+            loader = loader.credentials_provider(EnvironmentVariableCredentialsProvider::new());
+        }
         let mut config = aws_sdk_s3::config::Builder::from(&loader.load().await);
         if let Some(endpoint) = &destination.endpoint {
             config = config.endpoint_url(endpoint).force_path_style(true);
         }
         S3 {
             client: Client::from_conf(config.build()),
+            provider: destination.provider,
             bucket: destination.bucket.clone(),
             pending: None,
         }
@@ -74,11 +85,12 @@ impl S3 {
             .send()
             .await
             .map_err(|error| failure(&format!("upload {key}"), error))?;
-        confirm(key, output.checksum_sha256(), &expected)
+        confirm(key, "SHA-256 checksum", output.checksum_sha256(), &expected)
     }
 
-    /// Uploads a large file in parts. S3 checks each part against its SHA-256, and the
-    /// file must still match the staged SHA-256.
+    /// Uploads a large file in parts. The server checks each part against its checksum, and the
+    /// file must still match the staged SHA-256. R2 does not implement SHA-256 checksums of
+    /// parts, so for R2 the checksums are MD5 and come back as ETags.
     async fn put_parts(&mut self, key: &str, file: &Staged<'_>) -> Result<(), Error> {
         self.pending = Some((key.to_owned(), None));
         let created = self
@@ -86,7 +98,9 @@ impl S3 {
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
-            .checksum_algorithm(ChecksumAlgorithm::Sha256)
+            .set_checksum_algorithm(
+                (self.provider == Provider::S3).then_some(ChecksumAlgorithm::Sha256),
+            )
             .metadata("sha256", hex(&file.sha256))
             .send()
             .await
@@ -117,29 +131,40 @@ impl S3 {
         let mut parts = Vec::new();
         for (index, offset) in (0..file.size).step_by(part_size as usize).enumerate() {
             let length = part_size.min(file.size - offset);
-            let digest = hash(&mut reader, length, &mut whole)
-                .await
-                .map_err(|error| read_error(file, error))?;
-            let checksum = base64::encode(digest);
+            let digest = match self.provider {
+                Provider::S3 => hash::<Sha256>(&mut reader, length, &mut whole).await,
+                Provider::R2 => hash::<Md5>(&mut reader, length, &mut whole).await,
+            }
+            .map_err(|error| read_error(file, error))?;
+            let checksum = base64::encode(&digest);
             let number = index as i32 + 1;
-            let output = self
+            let request = self
                 .client
                 .upload_part()
                 .bucket(&self.bucket)
                 .key(key)
                 .upload_id(&upload_id)
                 .part_number(number)
-                .body(body(file, offset, length).await?)
-                .checksum_sha256(&checksum)
+                .body(body(file, offset, length).await?);
+            let request = match self.provider {
+                Provider::S3 => request.checksum_sha256(&checksum),
+                Provider::R2 => request.content_md5(&checksum),
+            };
+            let output = request
                 .send()
                 .await
                 .map_err(|error| failure(&format!("upload part {number} of {key}"), error))?;
-            confirm(key, output.checksum_sha256(), &checksum)?;
+            match self.provider {
+                Provider::S3 => {
+                    confirm(key, "SHA-256 checksum", output.checksum_sha256(), &checksum)
+                }
+                Provider::R2 => confirm(key, "ETag", e_tag(output.e_tag()), &hex(&digest)),
+            }?;
             parts.push(
                 CompletedPart::builder()
                     .part_number(number)
                     .set_e_tag(output.e_tag().map(str::to_owned))
-                    .checksum_sha256(checksum)
+                    .set_checksum_sha256((self.provider == Provider::S3).then_some(checksum))
                     .build(),
             );
             digests.extend(digest);
@@ -151,6 +176,7 @@ impl S3 {
             ));
         }
 
+        let count = parts.len();
         let output = self
             .client
             .complete_multipart_upload()
@@ -166,11 +192,24 @@ impl S3 {
             .await
             .map_err(|error| failure(&format!("complete the upload of {key}"), error))?;
         self.pending = None;
-        // A multipart checksum is the SHA-256 of the part checksums, with `-<parts>` appended.
-        let returned = output
-            .checksum_sha256()
-            .map(|checksum| checksum.split('-').next().unwrap_or(checksum));
-        confirm(key, returned, &base64::encode(Sha256::digest(&digests)))
+        // The checksum of a multipart upload is the digest of the part digests. S3 can append
+        // `-<parts>`, and R2 always appends it.
+        match self.provider {
+            Provider::S3 => confirm(
+                key,
+                "SHA-256 checksum",
+                output
+                    .checksum_sha256()
+                    .and_then(|checksum| checksum.split('-').next()),
+                &base64::encode(Sha256::digest(&digests)),
+            ),
+            Provider::R2 => confirm(
+                key,
+                "ETag",
+                e_tag(output.e_tag()),
+                &format!("{}-{count}", hex(&Md5::digest(&digests))),
+            ),
+        }
     }
 
     /// The IDs of the unfinished uploads to `key`.
@@ -260,9 +299,13 @@ async fn body(file: &Staged<'_>, offset: u64, length: u64) -> Result<ByteStream,
         })
 }
 
-/// The SHA-256 of the next `length` bytes. Also adds them to `whole`.
-async fn hash(reader: &mut File, length: u64, whole: &mut Sha256) -> std::io::Result<[u8; 32]> {
-    let mut part = Sha256::new();
+/// The digest of the next `length` bytes. Also adds them to `whole`.
+async fn hash<D: Digest>(
+    reader: &mut File,
+    length: u64,
+    whole: &mut Sha256,
+) -> std::io::Result<Vec<u8>> {
+    let mut part = D::new();
     let mut buffer = vec![0; BUFFER];
     let mut left = length;
     while left > 0 {
@@ -276,21 +319,26 @@ async fn hash(reader: &mut File, length: u64, whole: &mut Sha256) -> std::io::Re
         whole.update(&buffer[..read]);
         left -= read as u64;
     }
-    Ok(part.finalize().into())
+    Ok(part.finalize().to_vec())
 }
 
-/// Fails unless S3 returned the expected checksum.
-fn confirm(key: &str, returned: Option<&str>, expected: &str) -> Result<(), Error> {
+/// Fails unless the server returned the expected checksum or ETag.
+fn confirm(key: &str, what: &str, returned: Option<&str>, expected: &str) -> Result<(), Error> {
     match returned {
         Some(returned) if returned == expected => Ok(()),
         returned => Err(Error::new(
             Failure::Upload,
             format!(
-                "S3 returned the SHA-256 checksum {} for {key}, not {expected}",
+                "the server returned the {what} {} for {key}, not {expected}",
                 returned.unwrap_or("none")
             ),
         )),
     }
+}
+
+/// An ETag without its quotes.
+fn e_tag(value: Option<&str>) -> Option<&str> {
+    value.map(|tag| tag.trim_matches('"'))
 }
 
 /// Classifies an S3 error. Access errors need other credentials or permissions, so a retry
