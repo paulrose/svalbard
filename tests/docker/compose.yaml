@@ -148,6 +148,9 @@ services:
       - ../..:/svalbard:ro
       - certs:/certs:ro
       - ssh-keys:/keys:ro
+    # A staging filesystem that a dump fills.
+    tmpfs:
+      - /staging-small:size=256k
     environment:
       POSTGRESQL_VERSION: ${POSTGRESQL_VERSION:-18}
       # The build stays in the container.
@@ -157,6 +160,7 @@ services:
       SVALBARD_TEST_MYSQL: mysql://root:mysql@mysql:3306/mysql
       SVALBARD_TEST_MYSQL_CA: /certs/ca.crt
       SVALBARD_TEST_S3_ENDPOINT: http://floci:4566
+      SVALBARD_TEST_FLOCI_VERSION: ${FLOCI_VERSION:-2.3.0}
       SVALBARD_TEST_SSH_HOST: ssh
       SVALBARD_TEST_SSH_KEYS: /keys
       # The emulator's public test keys.
@@ -178,14 +182,24 @@ services:
     <<: *runner
     volumes:
       - ../..:/svalbard:ro
+      - certs:/certs:ro
     environment:
       - POSTGRESQL_VERSION=${POSTGRESQL_VERSION:-18}
       - CARGO_TARGET_DIR=/target
+      - SVALBARD_TEST_POSTGRESQL=postgresql://postgres:postgres@postgresql:5432/postgres
+      - SVALBARD_TEST_POSTGRESQL_CA=/certs/ca.crt
+      - SVALBARD_TEST_MYSQL=mysql://root:mysql@mysql:3306/mysql
+      - SVALBARD_TEST_MYSQL_CA=/certs/ca.crt
       # Names only: the values come from scripts/test-r2.sh, never from arguments.
       - SVALBARD_TEST_R2_ENDPOINT
       - SVALBARD_TEST_R2_BUCKET
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
 
 volumes:
   certs:

@@ -12,6 +12,14 @@ pub fn endpoint() -> String {
         .expect("SVALBARD_TEST_S3_ENDPOINT must be set: run scripts/test-integration.sh")
 }
 
+/// The host and port of Floci, for the test proxy.
+pub fn upstream() -> String {
+    endpoint()
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned()
+}
+
 /// A client with the setup key, which Floci never checks.
 pub fn setup() -> Client {
     let config = aws_sdk_s3::Config::builder()

@@ -271,3 +271,38 @@ async fn scp_without_a_shell_names_the_requirement() {
     assert!(error.message.contains("POSIX login shell"), "{error}");
     run.remove().unwrap();
 }
+
+#[tokio::test]
+#[ignore = "needs SSH: run scripts/test-integration.sh"]
+async fn failed_rename_reports_an_error_and_removes_the_partial_file() {
+    for mode in MODES {
+        let (dump, run) = staged(1 << 10);
+        let dir = directory("/srv/backups", &run.id);
+        let destination = destination(server(mode, &dir));
+        let stored = store(&destination, &dump, &run, future::pending())
+            .await
+            .unwrap_or_else(|error| panic!("{mode:?}: {error}"));
+        // A directory that `backup` cannot write now has the record's name.
+        let record = &stored.record;
+        shell(&format!(
+            "cd -- {} && rm -- {record} && mkdir -m 555 -- {record}",
+            quote(&dir)
+        ));
+
+        // The same run writes the same names, so the record's rename fails.
+        let error = store(&destination, &dump, &run, future::pending())
+            .await
+            .expect_err("the rename must fail");
+
+        assert!(
+            matches!(error.kind, Failure::Upload | Failure::AccessDenied),
+            "{mode:?}: {error}"
+        );
+        let files = files(&dir);
+        assert!(
+            !files.iter().any(|name| name.ends_with(".partial")),
+            "{mode:?}: {files:?}"
+        );
+        run.remove().unwrap();
+    }
+}

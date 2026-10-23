@@ -31,6 +31,7 @@ CREATE INDEX orders_placed ON orders (placed);
 CREATE VIEW balances AS SELECT email, balance FROM accounts WHERE balance > 0;
 CREATE TABLE events (id bigserial PRIMARY KEY);
 -- The tests lock this table to stall pg_dump. pg_dump locks the older tables first.
+CREATE TABLE blank (id int PRIMARY KEY, note text);
 CREATE TABLE stall (id int);
 
 INSERT INTO accounts (email, balance, tags, profile)
@@ -58,7 +59,24 @@ SELECT
   (SELECT string_agg(viewname || ' ' || definition, E'\n' ORDER BY viewname)
     FROM pg_views WHERE schemaname = 'public'),
   (SELECT md5(string_agg(a::text, E'\n' ORDER BY a.id)) FROM accounts a),
-  (SELECT md5(string_agg(o::text, E'\n' ORDER BY o.id)) FROM orders o)
+  (SELECT md5(string_agg(o::text, E'\n' ORDER BY o.id)) FROM orders o),
+  (SELECT count(*)::text FROM blank)
+"#;
+
+/// About 50k rows of about 200 bytes, for the tests that need more data.
+const LARGER: &str = r#"
+CREATE TABLE larger (
+  id bigint PRIMARY KEY,
+  name text NOT NULL,
+  amount numeric(14, 4),
+  created timestamptz NOT NULL,
+  flags boolean[],
+  payload bytea
+);
+INSERT INTO larger
+SELECT g, repeat(md5(g::text), 4), g * 0.0001, '2026-01-01'::timestamptz + g * interval '1 second',
+  ARRAY[g % 2 = 0, g % 3 = 0], decode(md5((g * 7)::text), 'hex')
+FROM generate_series(1, 50000) g;
 "#;
 
 /// Backup sessions in the current database. The control connection is `svalbard`.
@@ -108,6 +126,8 @@ pub struct Fixture {
     /// The admin connection to the database.
     pub admin: Config,
     pub database: String,
+    /// Whether [`Fixture::add_larger`] ran.
+    pub larger: bool,
 }
 
 impl Fixture {
@@ -128,9 +148,33 @@ impl Fixture {
         let mut admin = admin();
         admin.dbname(&database);
         connect(&admin).await.batch_execute(FIXTURE).await.unwrap();
-        let fixture = Fixture { admin, database };
+        let fixture = Fixture {
+            admin,
+            database,
+            larger: false,
+        };
         fs::write(fixture.password_file(), format!("{PASSWORD}\n")).unwrap();
         fixture
+    }
+
+    /// Adds the `larger` table.
+    pub async fn add_larger(&mut self) {
+        self.client().await.batch_execute(LARGER).await.unwrap();
+        self.larger = true;
+    }
+
+    /// Restores `dump` and checks that the schema and the data match the source.
+    pub async fn assert_restores(&self, dump: &[u8]) {
+        let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}.dump", self.database));
+        fs::write(&path, dump).unwrap();
+        let (restored, source) = (self.restore(&path).await, self.client().await);
+        assert_eq!(fingerprint(&restored).await, fingerprint(&source).await);
+        if self.larger {
+            assert_eq!(
+                larger_fingerprint(&restored).await,
+                larger_fingerprint(&source).await
+            );
+        }
     }
 
     pub fn password_file(&self) -> PathBuf {
@@ -213,4 +257,10 @@ impl Fixture {
 pub async fn fingerprint(client: &Client) -> Vec<Option<String>> {
     let row = client.query_one(FINGERPRINT, &[]).await.unwrap();
     (0..row.len()).map(|column| row.get(column)).collect()
+}
+
+/// The hash of the row hashes of the `larger` table.
+pub async fn larger_fingerprint(client: &Client) -> String {
+    let query = "SELECT md5(string_agg(md5(l::text), '' ORDER BY l.id)) FROM larger l";
+    client.query_one(query, &[]).await.unwrap().get(0)
 }

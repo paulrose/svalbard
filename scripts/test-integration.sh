@@ -24,5 +24,5 @@ cleanup() {
 trap cleanup EXIT
 
 "${compose[@]}" run --rm tests \
-  cargo test --locked --test postgresql --test mysql --test s3 --test ssh --test backup -- \
-  --ignored "${@:3}"
+  cargo test --locked --test postgresql --test mysql --test s3 --test ssh --test backup \
+  --test matrix -- --ignored --show-output "${@:3}"

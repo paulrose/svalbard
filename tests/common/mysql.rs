@@ -44,6 +44,7 @@ CREATE TRIGGER orders_note BEFORE INSERT ON orders FOR EACH ROW SET NEW.note = I
 CREATE PROCEDURE account_count(OUT n BIGINT) SELECT COUNT(*) INTO n FROM accounts;
 CREATE EVENT purge_orders ON SCHEDULE EVERY 1 DAY DISABLE
   DO DELETE FROM orders WHERE placed < '2000-01-01';
+CREATE TABLE blank (id INT PRIMARY KEY, note TEXT);
 CREATE TABLE events (id BIGINT AUTO_INCREMENT PRIMARY KEY);
 -- The tests lock this table to stall mysqldump, which dumps tables in name order.
 CREATE TABLE stall (id INT);
@@ -93,7 +94,26 @@ SELECT
   (SELECT SHA2(GROUP_CONCAT(CONCAT_WS('|', id, email, balance, profile, HEX(token), emoji, domain)
       ORDER BY id SEPARATOR '\n'), 256) FROM accounts),
   (SELECT SHA2(GROUP_CONCAT(CONCAT_WS('|', id, account_id, placed, HEX(note))
-      ORDER BY id SEPARATOR '\n'), 256) FROM orders)
+      ORDER BY id SEPARATOR '\n'), 256) FROM orders),
+  (SELECT COUNT(*) FROM blank)
+"#;
+
+/// About 50k rows of about 200 bytes, for the tests that need more data.
+const LARGER: &str = r#"
+CREATE TABLE larger (
+  id INT PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  amount DECIMAL(14, 4),
+  created DATETIME(6) NOT NULL,
+  flags SET('a', 'b', 'c'),
+  payload VARBINARY(32)
+);
+SET SESSION cte_max_recursion_depth = 50000;
+INSERT INTO larger
+WITH RECURSIVE g (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM g WHERE n < 50000)
+SELECT n, REPEAT(SHA2(n, 256), 2), n * 0.0001, TIMESTAMP '2026-01-01 00:00:00' + INTERVAL n SECOND,
+  ELT(1 + n % 3, 'a', 'b', 'a,c'), UNHEX(SHA2(n, 256))
+FROM g;
 "#;
 
 pub fn admin() -> Opts {
@@ -129,6 +149,8 @@ pub fn literal(value: &str) -> String {
 /// docs/database-safety.md.
 pub struct Fixture {
     pub database: String,
+    /// Whether [`Fixture::add_larger`] ran.
+    pub larger: bool,
 }
 
 impl Fixture {
@@ -152,7 +174,10 @@ impl Fixture {
             ))
             .await
             .unwrap();
-        let fixture = Fixture { database };
+        let fixture = Fixture {
+            database,
+            larger: false,
+        };
         // One statement at a time: in a multi-statement query, MySQL keeps the `;` in the
         // trigger body, and the dump of that body cannot be restored.
         let mut client = fixture.client().await;
@@ -161,6 +186,32 @@ impl Fixture {
         }
         fs::write(fixture.password_file(), format!("{PASSWORD}\n")).unwrap();
         fixture
+    }
+
+    /// Adds the `larger` table.
+    pub async fn add_larger(&mut self) {
+        let mut client = self.client().await;
+        for statement in LARGER.split(";\n").filter(|s| !s.trim().is_empty()) {
+            client.query_drop(statement).await.unwrap();
+        }
+        self.larger = true;
+    }
+
+    /// Restores `dump` and checks that the schema and the data match the source.
+    pub async fn assert_restores(&self, dump: &[u8]) {
+        let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{}.sql", self.database));
+        fs::write(&path, dump).unwrap();
+        let (mut restored, mut source) = (self.restore(&path).await, self.client().await);
+        assert_eq!(
+            fingerprint(&mut restored).await,
+            fingerprint(&mut source).await
+        );
+        if self.larger {
+            assert_eq!(
+                larger_fingerprint(&mut restored).await,
+                larger_fingerprint(&mut source).await
+            );
+        }
     }
 
     pub fn password_file(&self) -> PathBuf {
@@ -281,4 +332,16 @@ pub async fn fingerprint(client: &mut Conn) -> Vec<mysql_async::Value> {
         .unwrap();
     let row: Option<Row> = client.query_first(FINGERPRINT).await.unwrap();
     row.unwrap().unwrap()
+}
+
+/// The hash of the row hashes of the `larger` table.
+pub async fn larger_fingerprint(client: &mut Conn) -> String {
+    client
+        .query_drop("SET SESSION group_concat_max_len = 16777216")
+        .await
+        .unwrap();
+    let query = "SELECT SHA2(GROUP_CONCAT(SHA2(CONCAT_WS('|', id, name, amount, created, flags,
+        HEX(payload)), 256) ORDER BY id SEPARATOR ''), 256) FROM larger";
+    let hash: Option<String> = client.query_first(query).await.unwrap();
+    hash.unwrap()
 }
