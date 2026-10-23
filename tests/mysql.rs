@@ -1,4 +1,4 @@
-//! Tests against a MySQL server with TLS. Run them in Docker with `scripts/test-databases.sh`.
+//! Tests against a MySQL server with TLS. Run them in Docker with `scripts/test-integration.sh`.
 
 use std::{
     env, fs,
@@ -103,13 +103,13 @@ SELECT
 
 fn admin() -> Opts {
     let url = env::var("SVALBARD_TEST_MYSQL")
-        .expect("SVALBARD_TEST_MYSQL must be set: run scripts/test-databases.sh");
+        .expect("SVALBARD_TEST_MYSQL must be set: run scripts/test-integration.sh");
     Opts::from_url(&url).expect("SVALBARD_TEST_MYSQL must be a connection URL")
 }
 
 fn verify_full() -> Tls {
     let ca = env::var_os("SVALBARD_TEST_MYSQL_CA")
-        .expect("SVALBARD_TEST_MYSQL_CA must be set: run scripts/test-databases.sh");
+        .expect("SVALBARD_TEST_MYSQL_CA must be set: run scripts/test-integration.sh");
     Tls::VerifyFull(Some(ca.into()))
 }
 
@@ -322,7 +322,7 @@ async fn fingerprint(client: &mut Conn) -> Vec<mysql_async::Value> {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn dump_restores_with_the_same_schema_and_data() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("restore").await;
@@ -362,7 +362,7 @@ async fn dump_restores_with_the_same_schema_and_data() {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn lock_held_at_the_start_fails_with_lock_timeout() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("lock_timeout").await;
@@ -380,7 +380,7 @@ async fn lock_held_at_the_start_fails_with_lock_timeout() {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn cancellation_ends_only_the_backup_session() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("cancel").await;
@@ -410,7 +410,7 @@ async fn cancellation_ends_only_the_backup_session() {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn observe_reports_waits_and_terminate_ends_only_the_run() {
     // The FLUSH TABLES below waits for every open table on the server.
     let _exclusive = SERVER.write().await;
@@ -515,7 +515,7 @@ async fn observe_reports_waits_and_terminate_ends_only_the_run() {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn schema_change_during_the_dump_fails() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("schema_change").await;
@@ -548,7 +548,7 @@ async fn schema_change_during_the_dump_fails() {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn unsupported_tables_and_missing_privileges_fail_before_the_dump() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("privileges").await;
@@ -611,7 +611,7 @@ async fn unsupported_tables_and_missing_privileges_fail_before_the_dump() {
 }
 
 #[tokio::test]
-#[ignore = "needs MySQL: run scripts/test-databases.sh"]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn connection_problems_fail_before_the_dump() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("connection").await;

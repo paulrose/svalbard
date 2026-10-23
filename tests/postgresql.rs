@@ -1,4 +1,4 @@
-//! Tests against a PostgreSQL server with TLS. Run them in Docker with `scripts/test-databases.sh`.
+//! Tests against a PostgreSQL server with TLS. Run them in Docker with `scripts/test-integration.sh`.
 
 use std::{
     env, fs,
@@ -72,14 +72,14 @@ AND datname = current_database()";
 
 fn admin() -> Config {
     env::var("SVALBARD_TEST_POSTGRESQL")
-        .expect("SVALBARD_TEST_POSTGRESQL must be set: run scripts/test-databases.sh")
+        .expect("SVALBARD_TEST_POSTGRESQL must be set: run scripts/test-integration.sh")
         .parse()
         .expect("SVALBARD_TEST_POSTGRESQL must be a connection URL")
 }
 
 fn verify_full() -> Tls {
     let ca = env::var_os("SVALBARD_TEST_POSTGRESQL_CA")
-        .expect("SVALBARD_TEST_POSTGRESQL_CA must be set: run scripts/test-databases.sh");
+        .expect("SVALBARD_TEST_POSTGRESQL_CA must be set: run scripts/test-integration.sh");
     Tls::VerifyFull(Some(ca.into()))
 }
 
@@ -254,7 +254,7 @@ async fn fingerprint(client: &Client) -> Vec<Option<String>> {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL: run scripts/test-databases.sh"]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn dump_restores_with_the_same_schema_and_data() {
     let fixture = Fixture::create("restore").await;
     let source = fixture.client().await;
@@ -290,7 +290,7 @@ async fn dump_restores_with_the_same_schema_and_data() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL: run scripts/test-databases.sh"]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn schema_change_waiting_for_the_backup_stops_it() {
     let fixture = Fixture::create("contention").await;
     let _holder = fixture.hold_stall_lock().await;
@@ -313,7 +313,7 @@ async fn schema_change_waiting_for_the_backup_stops_it() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL: run scripts/test-databases.sh"]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn lock_held_at_the_start_fails_with_lock_timeout() {
     let fixture = Fixture::create("lock_timeout").await;
     let _holder = fixture.hold_stall_lock().await;
@@ -329,7 +329,7 @@ async fn lock_held_at_the_start_fails_with_lock_timeout() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL: run scripts/test-databases.sh"]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn cancellation_ends_only_the_backup_session() {
     let fixture = Fixture::create("cancel").await;
     let _holder = fixture.hold_stall_lock().await;
@@ -363,7 +363,7 @@ WHERE {BACKUP_SESSIONS}"
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL: run scripts/test-databases.sh"]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn unreadable_objects_fail_before_the_dump() {
     let fixture = Fixture::create("privileges").await;
     let admin = fixture.client().await;
@@ -394,7 +394,7 @@ async fn unreadable_objects_fail_before_the_dump() {
 }
 
 #[tokio::test]
-#[ignore = "needs PostgreSQL: run scripts/test-databases.sh"]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn connection_problems_fail_before_the_dump() {
     let fixture = Fixture::create("connection").await;
     let wrong = Path::new(env!("CARGO_TARGET_TMPDIR")).join("svalbard_connection-wrong");

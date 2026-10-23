@@ -93,7 +93,7 @@ The watchdog interval (1 s) and the cancellation grace period (10 s) are fixed. 
 
 The failure names are error kinds for the JSON result. The CLI issues assign the exit codes.
 
-The upload has separate deadlines, which the storage adapters define ([#11](https://github.com/paulrose/svalbard/issues/11)).
+The upload has a separate deadline, `destination.upload_timeout`. The upload reads only the staged file, after the snapshot closed.
 The dump deadline limits only the time that the snapshot stays open.
 
 ## Run sequence

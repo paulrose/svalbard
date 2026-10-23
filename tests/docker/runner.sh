@@ -9,8 +9,8 @@ rpm --install --quiet \
   "https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm"
 microdnf install --assumeyes gcc make tar gzip "postgresql${POSTGRESQL_VERSION}" >/dev/null
 curl --proto '=https' --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs |
-  sh -s -- -y --quiet --no-modify-path --profile minimal --default-toolchain 1.93.1 \
-    --component clippy --component rustfmt
+  sh -s -- -y --quiet --no-modify-path --profile minimal --default-toolchain 1.99.1 \
+    --component clippy --component rustfmt >/dev/null
 
 export PATH="/usr/pgsql-${POSTGRESQL_VERSION}/bin:$HOME/.cargo/bin:$PATH"
 exec "$@"

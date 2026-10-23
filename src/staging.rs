@@ -5,6 +5,7 @@ use std::{
     io::{self, Read},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 /// A private directory for one run. It holds the credential file and the staged dump.
@@ -13,6 +14,8 @@ pub struct Run {
     /// A random value, unique to the run. The database sessions of the run carry it as a label.
     pub id: String,
     pub dir: PathBuf,
+    /// The start of the run. Backup names use it, so a retried upload keeps its names.
+    pub started: SystemTime,
 }
 
 impl Run {
@@ -23,7 +26,11 @@ impl Run {
         let id: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
         let dir = staging.join(format!("svalbard-{id}"));
         DirBuilder::new().mode(0o700).create(&dir)?;
-        Ok(Run { id, dir })
+        Ok(Run {
+            id,
+            dir,
+            started: SystemTime::now(),
+        })
     }
 
     /// Deletes the run directory and its files.

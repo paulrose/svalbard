@@ -152,6 +152,7 @@ impl Postgres {
 impl Source for Postgres {
     const CLIENT: &'static str = "pg_dump";
     const FORMAT: &'static str = "pg_dump-custom";
+    const EXTENSION: &'static str = "dump";
 
     async fn preflight(&mut self, client_version: &str) -> Result<String, String> {
         let client = client_major(client_version)

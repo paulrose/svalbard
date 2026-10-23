@@ -1,4 +1,5 @@
-# PostgreSQL and MySQL servers with TLS, and the test runner. See scripts/test-databases.sh.
+# PostgreSQL and MySQL servers with TLS, the Floci S3 emulator, and the test runner.
+# See scripts/test-integration.sh.
 # The servers publish no ports. Only the runner on the Compose network can reach them.
 # Nothing is built, and nothing is written to the host: the script removes the containers,
 # the volumes and the images that it pulled.
@@ -81,6 +82,15 @@ services:
       certs:
         condition: service_completed_successfully
 
+  floci:
+    image: floci/floci:${FLOCI_VERSION:-2.3.0}
+    environment:
+      # IAM checks make bucket policies apply to the `floci` key that Svalbard uses. The setup
+      # key `test` skips them.
+      FLOCI_SERVICES_IAM_ENFORCEMENT_ENABLED: "true"
+      FLOCI_SERVICES_IAM_SEED_DEPLOYER_PRINCIPAL: "true"
+      FLOCI_SERVICES_UI_ENABLED: "false"
+
   tests:
     image: mysql:${MYSQL_SERIES:-8.4}
     entrypoint: [bash, /svalbard/tests/docker/runner.sh]
@@ -96,7 +106,15 @@ services:
       SVALBARD_TEST_POSTGRESQL_CA: /certs/ca.crt
       SVALBARD_TEST_MYSQL: mysql://root:mysql@mysql:3306/mysql
       SVALBARD_TEST_MYSQL_CA: /certs/ca.crt
+      SVALBARD_TEST_S3_ENDPOINT: http://floci:4566
+      # The emulator's public test keys.
+      AWS_ACCESS_KEY_ID: floci
+      AWS_SECRET_ACCESS_KEY: floci
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
     depends_on:
+      floci:
+        condition: service_healthy
       postgresql:
         condition: service_healthy
       mysql:

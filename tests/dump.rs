@@ -44,6 +44,7 @@ impl Fake {
 impl Source for Fake {
     const CLIENT: &'static str = "bash";
     const FORMAT: &'static str = "test";
+    const EXTENSION: &'static str = "test";
 
     async fn preflight(&mut self, client_version: &str) -> Result<String, String> {
         assert!(client_version.starts_with("GNU bash"), "{client_version}");

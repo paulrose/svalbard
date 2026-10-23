@@ -92,6 +92,9 @@ pub struct Destination {
     pub bucket: String,
     pub prefix: String,
     pub region: Option<String>,
+    /// An S3-compatible endpoint instead of AWS, such as `https://s3.example.com`.
+    pub endpoint: Option<String>,
+    pub upload_timeout: Duration,
 }
 
 #[derive(Debug)]
@@ -196,6 +199,18 @@ pub struct DestinationSettings {
         value_name = "REGION"
     )]
     pub region: Option<String>,
+    #[arg(
+        long = "destination-endpoint",
+        env = "SVALBARD_DESTINATION_ENDPOINT",
+        value_name = "URL"
+    )]
+    pub endpoint: Option<String>,
+    #[arg(
+        long = "destination-upload-timeout",
+        env = "SVALBARD_DESTINATION_UPLOAD_TIMEOUT",
+        value_name = "DURATION"
+    )]
+    pub upload_timeout: Option<String>,
 }
 
 #[derive(Args, Debug, Default, Deserialize)]
@@ -307,6 +322,19 @@ pub fn load(
                 "destination.region",
                 pick(&destination.region, &file_destination.region),
             )?,
+            endpoint: endpoint(optional(
+                "destination.endpoint",
+                pick(&destination.endpoint, &file_destination.endpoint),
+            )?)?,
+            upload_timeout: Duration::from_secs(limit(
+                "destination.upload_timeout",
+                pick(
+                    &destination.upload_timeout,
+                    &file_destination.upload_timeout,
+                ),
+                ["1h", "1min", "24h"],
+                TIME_UNITS,
+            )?),
         },
         safety: Safety {
             lock_timeout: Duration::from_secs(limit(
@@ -405,6 +433,23 @@ fn password(env: Option<&OsStr>, file: Option<&Path>) -> Result<Password, String
         (None, Some(path)) => existing_file("source.password_file", path).map(Password::File),
         (None, None) => Ok(Password::None),
     }
+}
+
+/// Checks the scheme. A URL with `user:password@` would put a secret in the configuration.
+fn endpoint(url: Option<String>) -> Result<Option<String>, String> {
+    let Some(url) = url else {
+        return Ok(None);
+    };
+    // Checked first, so that the next error never repeats a secret.
+    if url.contains('@') {
+        return Err("destination.endpoint must not contain credentials.".to_owned());
+    }
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(format!(
+            "destination.endpoint is `{url}`. Use an http:// or https:// URL."
+        ));
+    }
+    Ok(Some(url))
 }
 
 fn tls(mode: Option<&str>, ca_file: Option<&Path>) -> Result<Tls, String> {

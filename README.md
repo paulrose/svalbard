@@ -1,12 +1,12 @@
 # Svalbard
 
 Svalbard is an open-source Rust CLI for database backups.
-This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3.
+This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3 or an S3-compatible service.
 
 ## Build and run
 
 Install Rust with [rustup](https://rustup.rs/).
-The repository pins Rust 1.93.1, which is also the minimum supported Rust version.
+The repository pins Rust 1.99.1, which is also the minimum supported Rust version.
 Rustup selects this toolchain from `rust-toolchain.toml`.
 
 ```sh
@@ -49,6 +49,8 @@ Unknown keys, empty values and invalid values are errors.
 | `destination.bucket` | Required | Bucket name |
 | `destination.prefix` | Empty | Prefix for object keys |
 | `destination.region` | From the AWS configuration | AWS Region |
+| `destination.endpoint` | AWS | URL of an S3-compatible service, such as `https://s3.example.com` |
+| `destination.upload_timeout` | `1h` | `1min` to `24h` |
 | `safety.lock_timeout` | `10s` | `1s` to `5min` |
 | `safety.contention_timeout` | `2s` | `1s` to `60s` |
 | `safety.dump_timeout` | `1h` | `1min` to `24h` |
@@ -80,6 +82,33 @@ Secret values do not appear in errors or in the JSON result.
     SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}
 ```
 
+### Storage
+
+Each backup is two objects with the same name stem, under `destination.prefix`:
+
+```text
+app/20261022T134500Z-<run id>.dump   the dump (.dump for PostgreSQL, .sql for MySQL)
+app/20261022T134500Z-<run id>.json   the completion record
+```
+
+The time is the UTC start of the run. Svalbard uploads the record only after the dump is complete.
+A dump without a record is an incomplete backup. Svalbard never deletes it, because a backup bucket can deny deletes.
+
+The record holds `version` (1), `created`, `run_id`, `data` (the key of the dump), `format`, `client_version`, `server_version`, `size` and `sha256` (hexadecimal).
+The dump object also carries its SHA-256 as the metadata `x-amz-meta-sha256`.
+
+S3 checks every upload against a SHA-256: a small dump in one request, a larger dump in parts of 64 MiB or more.
+Svalbard also checks that the parts form the staged file. Each request has up to 3 attempts. `destination.upload_timeout` limits the whole upload.
+After an error or cancellation, Svalbard aborts the unfinished multipart upload.
+
+The S3 credentials need these permissions on the prefix:
+
+- `s3:PutObject` for the dump and the record.
+- `s3:AbortMultipartUpload` for cleanup after an error.
+- `s3:ListBucketMultipartUploads` on the bucket, recommended. It finds an upload that was cancelled before S3 returned its ID.
+
+Add a lifecycle rule with `AbortIncompleteMultipartUpload` to the bucket. It removes the parts of an upload that Svalbard could not abort, for example after `SIGKILL`.
+
 ### Output and exit codes
 
 Without `--json`, a valid configuration prints `Configuration is valid.` on stdout.
@@ -105,17 +134,17 @@ cargo test --locked
 The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for each pull request and each push to `main`.
 It uses the toolchain in `rust-toolchain.toml`. It needs no credentials or paid services.
 
-The PostgreSQL and MySQL tests run in Docker, which is their only requirement.
-[`scripts/test-databases.sh`](scripts/test-databases.sh) starts both servers with TLS on a private network, and a runner container that installs Rust and the native clients.
+The PostgreSQL, MySQL and S3 tests run in Docker, which is their only requirement.
+[`scripts/test-integration.sh`](scripts/test-integration.sh) starts both database servers with TLS and the [Floci](https://github.com/floci-io/floci) S3 emulator on a private network, and a runner container that installs Rust and the native clients.
 The arguments are the PostgreSQL version and the MySQL series. The defaults are 18 and 8.4.
 The script writes nothing to the host. At the end, it removes the containers, the volumes and the images that it pulled.
 
 ```sh
-scripts/test-databases.sh
-scripts/test-databases.sh 15 9.7
+scripts/test-integration.sh
+scripts/test-integration.sh 15 9.7
 ```
 
-CI runs these tests against PostgreSQL 15, 16, 17 and 18, and MySQL 8.4 and 9.7.
+CI runs these tests against PostgreSQL 15, 16, 17 and 18, MySQL 8.4 and 9.7, and Floci.
 
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 

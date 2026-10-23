@@ -23,6 +23,9 @@ type = "s3"
 bucket = "example-backups"
 prefix = "app/"
 region = "eu-west-1"
+# An S3-compatible service instead of AWS.
+# endpoint = "https://s3.example.com"
+upload_timeout = "1h"
 
 # Defaults. See docs/database-safety.md.
 [safety]
