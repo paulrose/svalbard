@@ -3,7 +3,7 @@ use std::{
     fs,
     future::{self, Future},
     os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -111,6 +111,7 @@ fn safety() -> Safety {
         dump_timeout: Duration::from_secs(60),
         max_dump_size: 1 << 30,
         min_free_space: 0,
+        staging_dir: PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
     }
 }
 

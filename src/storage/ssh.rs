@@ -209,6 +209,15 @@ impl Ssh {
         }
     }
 
+    /// The remote directory and the file name of `key`.
+    fn split<'a>(&self, key: &'a str) -> (String, &'a str) {
+        let path = self.config.path.trim_end_matches('/');
+        match key.rsplit_once('/') {
+            Some((dir, name)) => (format!("{path}/{dir}"), name),
+            None => (path.to_owned(), key),
+        }
+    }
+
     /// The options of every client: strict host keys, no prompts, and nothing from
     /// `ssh_config`.
     fn options(&self) -> Vec<String> {
@@ -246,12 +255,27 @@ impl Ssh {
 }
 
 impl Destination for Ssh {
+    /// Connects and enters the directory: this checks the host key, the authentication, the
+    /// directory and, for SCP, the shell.
+    async fn check(&mut self, prefix: &str) -> Result<(), Error> {
+        let (dir, _) = self.split(prefix);
+        match self.config.mode {
+            SshMode::Sftp => {
+                let batch = format!("@cd {}\n", sftp_quote(&dir));
+                self.run("sftp", SFTP, &["--", ALIAS], &batch, None, false)
+                    .await?;
+            }
+            SshMode::Scp => {
+                let script = format!("cd -- {}", shell_quote(&dir));
+                self.run("ssh", &[], &["--", ALIAS, &script], "", None, false)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn put(&mut self, key: &str, file: &Staged<'_>) -> Result<(), Error> {
-        let path = self.config.path.trim_end_matches('/');
-        let (dir, name) = match key.rsplit_once('/') {
-            Some((dir, name)) => (format!("{path}/{dir}"), name),
-            None => (path.to_owned(), key),
-        };
+        let (dir, name) = self.split(key);
         // Random for each attempt, so that a retry never writes to the file of an old session.
         let temporary = format!(".{name}.{}.partial", random()?);
         let (Some(local), Some(local_dir)) = (

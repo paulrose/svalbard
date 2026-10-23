@@ -8,7 +8,7 @@ use aws_config::{
 };
 use aws_sdk_s3::{
     Client,
-    config::http::HttpResponse,
+    config::{ProvideCredentials, SharedCredentialsProvider, http::HttpResponse},
     error::{DisplayErrorContext, ProvideErrorMetadata, SdkError},
     primitives::{ByteStream, Length},
     types::{ChecksumAlgorithm, CompletedMultipartUpload, CompletedPart},
@@ -32,6 +32,9 @@ const BUFFER: usize = 1 << 20;
 /// `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 pub struct S3 {
     client: Client,
+    /// The client's own provider is not public, so [`Destination::check`] uses these.
+    credentials: Option<SharedCredentialsProvider>,
+    region: Option<Region>,
     provider: Provider,
     bucket: String,
     /// The multipart upload in progress: its key, and its ID once S3 returned one.
@@ -59,12 +62,15 @@ impl S3 {
             // The rest of the AWS chain could send AWS credentials to Cloudflare.
             loader = loader.credentials_provider(EnvironmentVariableCredentialsProvider::new());
         }
-        let mut config = aws_sdk_s3::config::Builder::from(&loader.load().await);
+        let sdk = loader.load().await;
+        let mut config = aws_sdk_s3::config::Builder::from(&sdk);
         if let Some(endpoint) = &destination.endpoint {
             config = config.endpoint_url(endpoint).force_path_style(true);
         }
         S3 {
             client: Client::from_conf(config.build()),
+            credentials: sdk.credentials_provider(),
+            region: sdk.region().cloned(),
             provider: destination.provider,
             bucket: destination.bucket.clone(),
             pending: None,
@@ -233,6 +239,27 @@ impl S3 {
 }
 
 impl Destination for S3 {
+    /// Checks that the region and the credentials resolve. A request to the bucket would need a
+    /// permission that uploads do not need.
+    async fn check(&mut self, _prefix: &str) -> Result<(), Error> {
+        if self.region.is_none() {
+            return Err(Error::new(
+                Failure::Upload,
+                "no region: set destination.region or AWS_REGION",
+            ));
+        }
+        let Some(credentials) = &self.credentials else {
+            return Err(Error::new(Failure::AccessDenied, "no credentials"));
+        };
+        credentials.provide_credentials().await.map_err(|error| {
+            Error::new(
+                Failure::AccessDenied,
+                format!("cannot load credentials: {}", DisplayErrorContext(&error)),
+            )
+        })?;
+        Ok(())
+    }
+
     async fn put(&mut self, key: &str, file: &Staged<'_>) -> Result<(), Error> {
         if file.size <= part_size(file.size) {
             self.put_object(key, file).await

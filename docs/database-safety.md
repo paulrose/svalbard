@@ -91,7 +91,7 @@ Contention detection cancels the backup when a schema change waits for it.
 
 The watchdog interval (1 s) and the cancellation grace period (10 s) are fixed. They are not configuration values.
 
-The failure names are error kinds for the JSON result. The CLI issues assign the exit codes.
+The failure names are error kinds for the JSON result of `svalbard backup`. A failure exits with 4, and `cleanup_failed` exits with 5. See "Output and exit codes" in README.md.
 
 The upload has a separate deadline, `destination.upload_timeout`. The upload reads only the staged file, after the snapshot closed.
 The dump deadline limits only the time that the snapshot stays open.
@@ -105,6 +105,7 @@ The dump deadline limits only the time that the snapshot stays open.
 - The child environment contains only `PATH` and the variables that Svalbard sets. Inherited `PGOPTIONS`, `PG*` and `MYSQL_*` variables do not reach the client.
 - Credentials go in a private file in the run directory. They are never in arguments or in the environment.
 - On Linux, Svalbard sets `PR_SET_PDEATHSIG`. Then the client receives `SIGTERM` if Svalbard stops without cleanup.
+- The client runs in its own process group, so a Ctrl-C in a terminal reaches only Svalbard. Svalbard then cancels in the order below.
 
 ### Control connection
 
@@ -160,7 +161,7 @@ If the host stops, the server ends the sessions only after TCP detects the lost 
 
 ### Private staging
 
-- Svalbard creates a new run directory with mode `0700` in the staging directory. If the directory exists, the run fails.
+- Svalbard creates a new run directory with mode `0700` in the staging directory, `safety.staging_dir`. It is the system temp directory by default. If the run directory exists, the run fails.
 - Svalbard creates each file with mode `0600` and fails if the file exists.
 - The client writes the dump to standard output. Svalbard writes the staged file, counts its bytes and calculates its checksum.
 - Svalbard copies the stream through a fixed-size buffer. Its memory use does not depend on the size of the database.

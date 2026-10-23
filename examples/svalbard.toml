@@ -35,3 +35,6 @@ contention_timeout = "2s"
 dump_timeout = "1h"
 max_dump_size = "20GiB"
 min_free_space = "2GiB"
+# A directory for the staged dump, not on the filesystem of the database files.
+# The default is the system temp directory.
+# staging_dir = "/var/lib/svalbard"

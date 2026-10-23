@@ -1,7 +1,7 @@
 # Svalbard
 
 Svalbard is an open-source Rust CLI for database backups.
-This version validates the configuration for a PostgreSQL or MySQL backup to Amazon S3, Cloudflare R2, another S3-compatible service, or an SSH server with SFTP or SCP.
+It backs up PostgreSQL or MySQL to Amazon S3, Cloudflare R2, another S3-compatible service, or an SSH server with SFTP or SCP.
 
 ## Build and run
 
@@ -62,6 +62,7 @@ Unknown keys, empty values and invalid values are errors.
 | `safety.dump_timeout` | `1h` | `1min` to `24h` |
 | `safety.max_dump_size` | `20GiB` | `1MiB` to `16TiB` |
 | `safety.min_free_space` | `2GiB` | `0B` to `1TiB` |
+| `safety.staging_dir` | The system temp directory (`TMPDIR`) | An existing directory for the staged dumps, not on the filesystem of the database files |
 
 With `verify-full`, the database connections require TLS, and Svalbard checks the server certificate and host name.
 Without `source.tls_ca_file`, Svalbard uses the system trust store. Then `pg_dump` needs libpq 16 or newer, and MySQL uses the CA bundle file of the system OpenSSL.
@@ -167,17 +168,53 @@ The record holds the SHA-256 of the dump.
 
 A host key that is missing or does not match gives `host_key_rejected`. A rejected key or a denied write gives `access_denied`.
 
-### Output and exit codes
+## Back up
 
-Without `--json`, a valid configuration prints `Configuration is valid.` on stdout.
+```sh
+export SVALBARD_SOURCE_PASSWORD='…'
+./target/release/svalbard backup --config svalbard.toml
+./target/release/svalbard backup --config svalbard.toml --json
+```
+
+`svalbard backup` uses the same configuration, flags and environment variables as `config check`. It runs these stages in order:
+
+1. `configuration`: Svalbard validates the configuration.
+2. `destination`: Svalbard checks what it can without writing. For S3 and R2, these are the region and the credentials. For SSH, these are the connection, the host key, the authentication and the directory. The check has 30 s.
+3. `staging`: Svalbard creates a private run directory in `safety.staging_dir`.
+4. `dump`: Svalbard checks the source and dumps it under the [database safety contract](docs/database-safety.md). Then it closes the snapshot and the database connections.
+5. `transfer`: Svalbard uploads the staged dump, and then its completion record. After an `upload` failure, Svalbard tries once more after 10 s, with the same staged dump and the same names, within `destination.upload_timeout`.
+6. `cleanup`: Svalbard deletes the run directory, after a success and after a failure.
+
+A backup is complete when the dump and its record are both stored. Only then does Svalbard report success.
+Progress lines go to stderr.
+
+SIGINT and SIGTERM cancel the backup. Svalbard ends the backup sessions, stops the clients, removes unfinished uploads and temporary files, and deletes the run directory.
+This cleanup can take up to about a minute. If a CI system sends SIGKILL sooner, no cleanup runs.
+Then `PR_SET_PDEATHSIG` stops the clients, the server-side backstops end the database sessions, and the lifecycle rule (S3) or the `.partial` names (SSH) mark what remains.
+GitHub Actions sends SIGINT, then SIGTERM, and then SIGKILL about 10 s after it cancels a job.
+
+## Output and exit codes
+
+`config check` prints `Configuration is valid.` on stdout.
 With `--json`, stdout gets `{"valid":true}` or `{"valid":false,"error":"<message>"}`.
-Errors always go to stderr.
+
+`backup` prints `Backup complete: <data> and <record>.` on stdout. With `--json`, stdout gets one object:
+
+```json
+{"result":"complete","run_id":"…","data":"app/….dump","record":"app/….json","size":1048576,"sha256":"…","format":"pg_dump-custom","client_version":"pg_dump (PostgreSQL) 18.0","server_version":"18.0"}
+{"result":"failed","stage":"transfer","error":"access_denied","message":"…","run_id":"…"}
+```
+
+`stage` is one of the stages above. `error` is a failure kind, such as `lock_timeout`, `access_denied` or `cancelled`.
+Errors always go to stderr. No output contains a secret.
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | The configuration is valid, or the CLI printed help or version output. |
+| `0` | The configuration is valid, the backup is complete, or the CLI printed help or version output. |
 | `2` | Usage error, such as an unknown flag. The output is not JSON. |
 | `3` | The configuration is invalid. |
+| `4` | The backup failed, and Svalbard cleaned up. The backup can run again. |
+| `5` | The backup failed, and the cleanup failed too (`cleanup_failed`). A backup session, the run directory or an unfinished upload may remain. The message says which. |
 
 ## Development
 

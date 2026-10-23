@@ -150,6 +150,8 @@ pub struct Safety {
     pub dump_timeout: Duration,
     pub max_dump_size: u64,
     pub min_free_space: u64,
+    /// An existing directory for the run directories.
+    pub staging_dir: PathBuf,
 }
 
 /// Unvalidated, non-secret values from one layer: flags and environment variables, or the file.
@@ -333,6 +335,12 @@ pub struct SafetySettings {
         value_name = "SIZE"
     )]
     pub min_free_space: Option<String>,
+    #[arg(
+        long = "safety-staging-dir",
+        env = "SVALBARD_SAFETY_STAGING_DIR",
+        value_name = "PATH"
+    )]
+    pub staging_dir: Option<PathBuf>,
 }
 
 /// Validates the configuration without network access.
@@ -437,6 +445,12 @@ pub fn load(
                 pick(&safety.min_free_space, &file_safety.min_free_space),
                 ["2GiB", "0B", "1TiB"],
                 SIZE_UNITS,
+            )?,
+            staging_dir: staging_dir(
+                safety
+                    .staging_dir
+                    .as_deref()
+                    .or(file_safety.staging_dir.as_deref()),
             )?,
         },
     })
@@ -701,6 +715,22 @@ fn tls(mode: Option<&str>, ca_file: Option<&Path>) -> Result<Tls, String> {
         }
         (mode, _) => Err(format!(
             "source.tls is `{mode}`. Use `verify-full` or `disable`."
+        )),
+    }
+}
+
+/// The staging directory, or the system temp directory. It must exist.
+fn staging_dir(path: Option<&Path>) -> Result<PathBuf, String> {
+    let path = path.map_or_else(env::temp_dir, Path::to_owned);
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Err(format!(
+            "safety.staging_dir {} is not a directory.",
+            path.display()
+        )),
+        Err(error) => Err(format!(
+            "safety.staging_dir {} cannot be opened: {error}",
+            path.display()
         )),
     }
 }

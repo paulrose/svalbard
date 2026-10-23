@@ -44,6 +44,10 @@ pub trait Destination {
     /// Removes what an unfinished [`Destination::put`] to `key` left. Never removes a complete
     /// object, so a destination that denies deletes keeps its backups.
     async fn abort(&mut self, key: &str) -> Result<(), Error>;
+
+    /// Checks what it can without writing, before the dump: for example the credentials, the
+    /// connection, or the directory of the files under `prefix`.
+    async fn check(&mut self, prefix: &str) -> Result<(), Error>;
 }
 
 /// A local file to upload.

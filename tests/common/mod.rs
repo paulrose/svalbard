@@ -1,5 +1,10 @@
-//! Helpers for the storage tests. Each test crate uses a part of them.
+//! Helpers for the integration tests. Each test crate uses a part of them.
 #![allow(dead_code)]
+
+pub mod floci;
+pub mod mysql;
+pub mod postgresql;
+pub mod ssh;
 
 use std::{
     future::{self, Future},
