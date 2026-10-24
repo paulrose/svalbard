@@ -22,16 +22,16 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const SESSIONS: &str = "SELECT pid FROM pg_stat_activity
 WHERE application_name = $1 AND usename = current_user";
 
-/// The lock waits of the backup sessions in $1, and the sessions that wait for them.
-/// `pg_blocking_pids()` never reports the startup process of a standby, so WAL replay that waits
-/// for a table lock of the backup is matched by the relation.
+/// The lock waits of the backup sessions in $1, and the sessions that wait for them, with the
+/// lock that they want. `pg_blocking_pids()` never reports the startup process of a standby, so
+/// WAL replay that waits for a table lock of the backup is matched by the relation.
 const WAITS: &str = "WITH waiting AS MATERIALIZED (
   SELECT pid, mode, locktype, database, relation FROM pg_locks WHERE NOT granted
 )
 SELECT pid = ANY($1),
   CASE WHEN pid = ANY($1)
     THEN format('%s on %s', mode, coalesce(relation::regclass::text, locktype))
-    ELSE format('session %s', pid)
+    ELSE format('session %s (%s on %s)', pid, mode, coalesce(relation::regclass::text, locktype))
   END
 FROM waiting
 WHERE pid = ANY($1) OR pg_blocking_pids(pid) && $1

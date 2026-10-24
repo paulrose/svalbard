@@ -59,8 +59,7 @@ The standby delays replay up to `max_standby_streaming_delay` (default 30 s), th
 While replay waits, replication lag grows. If the delay is `-1`, replay can wait until the dump ends.
 The watchdog treats WAL replay that waits for a backup lock as contention, with any `max_standby_streaming_delay`.
 It does not see replay that waits for the dump's snapshot, because that wait holds no lock.
-Under write load, VACUUM on the primary can truncate empty pages at the end of a table. The replay of the truncation needs an `ACCESS EXCLUSIVE` lock, so the watchdog cancels a dump on the standby with `contention`.
-The storage parameter `vacuum_truncate = false` on frequently updated tables prevents this.
+Under write load on the primary, replay can wait for a lock of the dump even without a schema change. The `contention` message names the process and the lock that it wants.
 
 `hot_standby_feedback = on` prevents cleanup conflicts. It also holds back vacuum on the primary for all databases, which can cause bloat.
 Svalbard does not change this setting.
@@ -272,7 +271,7 @@ WITH waiting AS MATERIALIZED (
 SELECT pid = ANY($1),
   CASE WHEN pid = ANY($1)
     THEN format('%s on %s', mode, coalesce(relation::regclass::text, locktype))
-    ELSE format('session %s', pid)
+    ELSE format('session %s (%s on %s)', pid, mode, coalesce(relation::regclass::text, locktype))
   END
 FROM waiting
 WHERE pid = ANY($1) OR pg_blocking_pids(pid) && $1

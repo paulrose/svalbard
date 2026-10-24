@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Measures the workload impact of backups against the budgets in docs/database-safety.md
 # ("Measurement plan"), for one PostgreSQL version and one MySQL series. It runs the steps of
-# tests/workload.rs in one runner container, and prints Markdown tables. A pair takes about 75
-# minutes and needs about 15 GB of Docker disk.
+# tests/workload.rs in one runner container, and prints Markdown tables. A pair takes about an
+# hour and needs about 15 GB of Docker disk.
 #
 # Docker is the only requirement. On a host with 8 or more CPUs, each server, the load and the
 # backup get their own CPUs. At the end, the script removes the containers, the volumes and the

@@ -255,7 +255,7 @@ Each test prints a `scenario:` line with the results and the timings against bud
 It loads the primary with pgbench or sysbench at half of the throughput that the servers sustain, runs backups back to back on the primary and on the standby or replica, and restores the last dump of each.
 It prints Markdown tables: latency, throughput, errors, server CPU and I/O, the memory of Svalbard and the duration of the detection query.
 On a host with 8 or more CPUs, the servers, the load and the backup get their own CPUs.
-A pair takes about 75 minutes and needs about 15 GB of Docker disk. Like the tests, the script leaves nothing behind.
+A pair takes about an hour and needs about 15 GB of Docker disk. Like the tests, the script leaves nothing behind.
 
 ```sh
 scripts/measure.sh 18 8.4
