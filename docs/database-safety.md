@@ -530,7 +530,7 @@ Record the memory of Svalbard and the staged bytes.
 
 ### Budgets
 
-These budgets are initial targets. Review them after the first measurements. A release needs all budgets met, or an approved change to a budget.
+These budgets are initial targets. Review them after the first measurements, which are in [#32](https://github.com/paulrose/svalbard/pull/32). A release needs all budgets met, or an approved change to a budget.
 
 | ID | Measurement | Budget |
 | --- | --- | --- |
