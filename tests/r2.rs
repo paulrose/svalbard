@@ -1,8 +1,9 @@
 //! Compatibility tests against a real Cloudflare R2 bucket. Run them in Docker with
 //! `scripts/test-r2.sh`.
 //!
-//! Each backup goes under `svalbard-test/<run id>/`, and each test removes what it wrote. A
-//! lifecycle rule on the test buckets removes what a failed test leaves.
+//! Each backup goes under `svalbard-test/`, and each test removes what it wrote. A lifecycle rule
+//! on the test buckets removes what a failed test leaves. The CLI tests restore with the native
+//! clients and print one evidence line each.
 
 mod common;
 
@@ -15,7 +16,10 @@ use std::{
 
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::{Client, presigning::PresigningConfig, types::ChecksumMode};
-use common::{hex, staged, store};
+use common::{
+    cli::{self, MYSQL_SECRETS, POSTGRESQL_SECRETS, Setup},
+    hex, mysql, postgresql, staged, store,
+};
 use sha2::{Digest, Sha256};
 use svalbard::{
     config::{self, DestinationSettings, Settings, SourceSettings, Target},
@@ -248,4 +252,130 @@ async fn bucket_outside_the_token_scope_is_access_denied() {
 
     assert_eq!(error.kind, Failure::AccessDenied, "{error}");
     run.remove().unwrap();
+}
+
+/// A new prefix under `svalbard-test/` for one CLI run.
+fn cli_prefix(test: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("svalbard-test/{test}-{nanos}/")
+}
+
+/// The R2 destination for a CLI run under `prefix`.
+fn cli_destination(prefix: &str) -> String {
+    cli::r2(&var("SVALBARD_TEST_R2_ENDPOINT"), &bucket(), prefix)
+}
+
+/// The secrets that must not appear: the source's, and the R2 secret.
+fn secrets<'a>(source: &[&'a str], r2: &'a str) -> Vec<&'a str> {
+    [source, &[r2]].concat()
+}
+
+/// Checks the stored files against the CLI result, and returns the dump.
+async fn check(client: &Client, prefix: &str, result: &serde_json::Value) -> Vec<u8> {
+    assert_eq!(result["result"], "complete", "{result}");
+    let (data, record) = (
+        result["data"].as_str().unwrap(),
+        result["record"].as_str().unwrap(),
+    );
+    let (mut stored, mut expected) = (objects(client, prefix).await, [data, record]);
+    stored.sort();
+    expected.sort();
+    assert_eq!(stored, expected);
+    assert!(uploads(client, prefix).await.is_empty());
+    let dump = download(client, data).await;
+    assert_eq!(result["size"], dump.len());
+    assert_eq!(result["sha256"], hex(&Sha256::digest(&dump)));
+    let record: serde_json::Value =
+        serde_json::from_slice(&download(client, record).await).unwrap();
+    assert_eq!(record["sha256"], result["sha256"]);
+    dump
+}
+
+fn report(source: &str, result: &serde_json::Value) {
+    println!(
+        "matrix: {source} {} ({}) -> r2: restored {} bytes",
+        result["server_version"].as_str().unwrap(),
+        result["client_version"].as_str().unwrap(),
+        result["size"]
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs R2: run scripts/test-r2.sh"]
+async fn postgresql_backup_to_r2_restores() {
+    let client = client().await;
+    let prefix = cli_prefix("cli-postgresql");
+    let mut fixture = postgresql::Fixture::create("r2_cli").await;
+    fixture.add_larger().await;
+    let setup = Setup::new(
+        "r2-cli-postgresql",
+        &cli::postgresql_source(&fixture),
+        &cli_destination(&prefix),
+        "",
+    );
+    let r2_secret = var("AWS_SECRET_ACCESS_KEY");
+    let outcome = setup
+        .run(
+            postgresql::PASSWORD,
+            &secrets(POSTGRESQL_SECRETS, &r2_secret),
+        )
+        .await;
+
+    assert_eq!(outcome.code, Some(0), "{outcome:?}");
+    let dump = check(&client, &prefix, &outcome.result).await;
+    fixture.assert_restores(&dump).await;
+    report("postgresql", &outcome.result);
+    clean(&client, &prefix).await;
+}
+
+#[tokio::test]
+#[ignore = "needs R2: run scripts/test-r2.sh"]
+async fn mysql_backup_to_r2_restores() {
+    let client = client().await;
+    let prefix = cli_prefix("cli-mysql");
+    let mut fixture = mysql::Fixture::create("r2_cli").await;
+    fixture.add_larger().await;
+    let setup = Setup::new(
+        "r2-cli-mysql",
+        &cli::mysql_source(&fixture),
+        &cli_destination(&prefix),
+        "",
+    );
+    let r2_secret = var("AWS_SECRET_ACCESS_KEY");
+    let outcome = setup
+        .run(mysql::PASSWORD, &secrets(MYSQL_SECRETS, &r2_secret))
+        .await;
+
+    assert_eq!(outcome.code, Some(0), "{outcome:?}");
+    let dump = check(&client, &prefix, &outcome.result).await;
+    fixture.assert_restores(&dump).await;
+    report("mysql", &outcome.result);
+    clean(&client, &prefix).await;
+}
+
+#[tokio::test]
+#[ignore = "needs R2: run scripts/test-r2.sh"]
+async fn rejected_r2_secret_stores_nothing() {
+    let client = client().await;
+    let prefix = cli_prefix("cli-secret");
+    let fixture = mysql::Fixture::create("r2_cli_secret").await;
+    let setup = Setup::new(
+        "r2-cli-secret",
+        &cli::mysql_source(&fixture),
+        &cli_destination(&prefix),
+        "",
+    );
+    let (r2_secret, wrong) = (var("AWS_SECRET_ACCESS_KEY"), "0".repeat(64));
+    let child = setup.spawn_with(mysql::PASSWORD, &[("AWS_SECRET_ACCESS_KEY", &wrong)]);
+    let outcome = setup
+        .finish(child, &[MYSQL_SECRETS, &[&r2_secret, &wrong]].concat())
+        .await;
+
+    assert_eq!(outcome.code, Some(4), "{outcome:?}");
+    assert_eq!(outcome.result["stage"], "transfer", "{outcome:?}");
+    assert_eq!(outcome.result["error"], "access_denied", "{outcome:?}");
+    assert!(objects(&client, &prefix).await.is_empty());
 }

@@ -1,6 +1,7 @@
 //! Helpers for the integration tests. Each test crate uses a part of them.
 #![allow(dead_code)]
 
+pub mod cli;
 pub mod floci;
 pub mod mysql;
 pub mod postgresql;
@@ -86,6 +87,8 @@ pub enum Fault {
     StallThenRefuse(u64),
     /// Closes the connection that sends more than this many bytes in total.
     CloseAfter(u64),
+    /// Closes every connection that sends more than this many bytes of its own.
+    CloseEachAfter(u64),
     /// Never returns the answer to the first request.
     HoldFirstResponse,
 }
@@ -129,11 +132,19 @@ pub async fn proxy(upstream: &str, fault: Fault) -> Proxy {
                     let _ = tokio::io::copy(&mut server_read, &mut client_write).await;
                 });
                 let mut buffer = vec![0; 64 << 10];
+                let mut own = 0;
                 loop {
                     let Ok(read @ 1..) = client_read.read(&mut buffer).await else {
                         return;
                     };
+                    own += read as u64;
                     let total = sent.fetch_add(read as u64, Ordering::SeqCst) + read as u64;
+                    if let Fault::CloseEachAfter(limit) = fault
+                        && own > limit
+                    {
+                        answers.abort();
+                        return;
+                    }
                     if let Fault::StallAfter(limit) | Fault::StallThenRefuse(limit) = fault
                         && active
                         && total > limit

@@ -26,14 +26,6 @@ use tokio::{
     net::TcpListener,
 };
 
-/// The host and port of Floci, for the test proxy.
-fn upstream() -> String {
-    endpoint()
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned()
-}
-
 fn destination(bucket: &str, endpoint: String, upload_timeout: Duration) -> config::Destination {
     config::Destination {
         target: Target::ObjectStore(ObjectStore {

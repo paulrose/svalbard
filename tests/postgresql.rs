@@ -185,8 +185,9 @@ async fn unreadable_objects_fail_before_the_dump() {
     let error = failure(fixture.source(Tls::Disable), &safety(), future::pending()).await;
 
     assert_eq!(error.kind, Failure::Preflight, "{error}");
-    assert!(error.message.contains("table public.orders"), "{error}");
-    assert!(error.message.contains("and 1 more"), "{error}");
+    // The first five of the seven unreadable objects, in name order, and a count of the rest.
+    assert!(error.message.contains("table public.blank"), "{error}");
+    assert!(error.message.contains("and 2 more"), "{error}");
     assert!(!error.message.contains("table public.accounts"), "{error}");
 }
 

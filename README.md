@@ -241,9 +241,16 @@ scripts/test-integration.sh 15 9.7
 
 CI runs these tests against PostgreSQL 15, 16, 17 and 18, MySQL 8.4 and 9.7, Floci, and OpenSSH on Alpine Linux.
 
+`tests/matrix.rs` runs `svalbard backup` for each source with each container destination: S3 (Floci), SFTP and SCP.
+Each test downloads the backup without Svalbard, restores it with `pg_restore` or `mysql`, and compares the schema and the data, including an empty table and a larger one.
+`tests/backup.rs` runs the CLI into failures: a wrong password, denied writes, a missing record, signals, a full staging filesystem, rejected credentials, and broken transfers.
+Every failure must exit with an error, leave no completion record and no staged files, and keep secrets out of the output.
+The matrix tests print one `matrix:` line each, with the client and server versions, in the `successes` output of the test run.
+
 The R2 tests need a real R2 bucket. [`scripts/test-r2.sh`](scripts/test-r2.sh) runs them in Docker.
 Set `SVALBARD_TEST_R2_ENDPOINT` and `SVALBARD_TEST_R2_BUCKET`, and the keys of an R2 API token with Object Read & Write on the bucket in `SVALBARD_TEST_R2_ACCESS_KEY_ID` and `SVALBARD_TEST_R2_SECRET_ACCESS_KEY`.
 The tests write under `svalbard-test/` and remove what they wrote.
+The script also starts PostgreSQL and MySQL, because the R2 tests include backups through the CLI with native restores.
 Give the bucket a lifecycle rule that deletes objects under `svalbard-test/` after a day, for tests that fail before their cleanup.
 
 ```sh
