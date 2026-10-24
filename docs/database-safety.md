@@ -57,7 +57,7 @@ Use a source in this order of preference:
 
 The standby delays replay up to `max_standby_streaming_delay` (default 30 s), then cancels the dump. The backup fails.
 While replay waits, replication lag grows. If the delay is `-1`, replay can wait until the dump ends.
-The watchdog treats WAL replay that waits for a backup lock as contention (Experiment: confirm that detection sees the startup process).
+The watchdog treats WAL replay that waits for a backup lock as contention, with any `max_standby_streaming_delay`.
 
 `hot_standby_feedback = on` prevents cleanup conflicts. It also holds back vacuum on the primary for all databases, which can cause bloat.
 Svalbard does not change this setting.
@@ -68,8 +68,10 @@ A dump from a standby always excludes the data in unlogged tables.
 Svalbard never uses `--dump-replica` and never stops replication.
 The replication applier needs an exclusive metadata lock for each replicated schema change.
 If the dump holds a lock on the same table, the applier waits, later transactions wait in commit order, and replication lag grows.
-The watchdog treats the waiting applier as contention (Experiment: confirm that detection sees the applier threads).
+The watchdog treats the waiting applier as contention.
 A replicated schema change on a table that the dump did not read yet fails the run with `schema_changed` (see [Schema changes](#schema-changes)).
+A replica keeps the events of its source disabled, so a dump from a replica contains them as `DISABLE ON REPLICA`.
+After a restore to a new source, enable them with `ALTER EVENT ... ENABLE`.
 
 ### Primary
 
@@ -89,7 +91,7 @@ Contention detection cancels the backup when a schema change waits for it.
 | Staged file size | `max_dump_size` | 20 GiB | 1 MiB to 16 TiB | Svalbard counts the bytes that it writes. | `staging_limit` |
 | Free space on the staging filesystem | `min_free_space` | 2 GiB | 0 to 1 TiB | A free-space check before the dump and after each 64 MiB written. | `staging_limit` |
 
-The watchdog interval (1 s) and the cancellation grace period (10 s) are fixed. They are not configuration values.
+The watchdog interval (1 s), the cancellation grace period (10 s) and the preflight limit (60 s) are fixed. They are not configuration values.
 
 The failure names are error kinds for the JSON result of `svalbard backup`. A failure exits with 4, and `cleanup_failed` exits with 5. See "Output and exit codes" in README.md.
 
@@ -125,6 +127,7 @@ Before the dump starts, Svalbard checks:
 - That one detection query succeeds.
 
 If a check fails, no dump starts. A failed detection check gives `detection_unavailable`.
+`dump_timeout` starts only with the client, so the preflight has its own limit of 60 s. A server that accepts the connection and then does not answer gives `preflight`.
 
 ### Watchdog
 
@@ -172,16 +175,17 @@ If it is, set a larger `min_free_space`, because a full disk can stop the databa
 
 ### Snapshot closure before upload
 
-The dump step succeeds only when all of these conditions are true:
+The dump step succeeds only when all of these conditions are true, in this order:
 
-1. The client exited with status 0.
-2. Svalbard read the end of the client's standard output.
-3. Svalbard flushed and closed the staged file.
-4. The control connection shows no backup session.
-5. For MySQL, the schema did not change during the dump.
+1. Svalbard read the end of the client's standard output.
+2. The client exited with status 0.
+3. The control connection shows no backup session.
+4. For MySQL, the schema did not change during the dump.
+5. Svalbard flushed, synced and closed the staged file.
 
 Svalbard uses the exit status, not the dump content, because `mysqldump` can write its `Dump completed` line after an error.
 After the checks, Svalbard closes the control connection and the upload starts.
+A signal during these checks takes effect before the upload starts, and the run fails at the `transfer` stage with `cancelled`.
 The upload reads the staged file. It never reads the client stream, because a slow upload keeps the snapshot open.
 
 ### Cleanup
@@ -224,7 +228,7 @@ The `pg_dump` timeout ends the wait if Svalbard stops without cleanup.
 
 `pg_dump` does not reset `client_connection_check_interval`.
 If the server accepts the setting, Svalbard sets it to 10 s through `PGOPTIONS`.
-Then the server ends the session within 10 s after the client disconnects (Experiment: confirm this during a lock wait).
+Then the server ends the session within 10 s after the client disconnects, also during a lock wait.
 The setting needs a Linux, macOS, illumos or BSD server.
 
 ### Arguments
@@ -249,6 +253,8 @@ The value has less than 64 ASCII characters and contains no secrets, because all
 ### Contention detection
 
 The watchdog uses `pg_locks` and `pg_blocking_pids()`. Both need no special privileges.
+`pg_blocking_pids()` never reports the startup process of a standby, because the startup process is not a backend.
+WAL replay takes only `ACCESS EXCLUSIVE` locks on relations, so the watchdog also counts a waiting `ACCESS EXCLUSIVE` request on a relation that a backup session has locked.
 `pg_stat_activity` hides `wait_event` and `query` for the sessions of other roles, so the watchdog does not use these columns.
 
 ```sql
@@ -256,19 +262,27 @@ The watchdog uses `pg_locks` and `pg_blocking_pids()`. Both need no special priv
 SELECT pid FROM pg_stat_activity
 WHERE application_name = $1 AND usename = current_user;
 
--- Sessions that wait, with the backup sessions that block them
+-- The lock waits of the backup sessions in $1, and the sessions that wait for them
 WITH waiting AS MATERIALIZED (
-  SELECT DISTINCT pid, waitstart FROM pg_locks WHERE NOT granted
+  SELECT pid, mode, locktype, database, relation FROM pg_locks WHERE NOT granted
 )
-SELECT pid, now() - waitstart AS waited
+SELECT pid = ANY($1),
+  CASE WHEN pid = ANY($1)
+    THEN format('%s on %s', mode, coalesce(relation::regclass::text, locktype))
+    ELSE format('session %s', pid)
+  END
 FROM waiting
-WHERE pg_blocking_pids(pid) && $2;
+WHERE pid = ANY($1) OR pg_blocking_pids(pid) && $1
+  OR mode = 'AccessExclusiveLock' AND locktype = 'relation' AND (database, relation) IN (
+    SELECT database, relation FROM pg_locks
+    WHERE granted AND pid = ANY($1) AND locktype = 'relation'
+  );
 ```
 
 `pg_blocking_pids()` reports the sessions that hold a conflicting lock and the sessions ahead in the wait queue.
 Frequent calls need short exclusive access to the lock manager. The materialized CTE calls the function only for sessions that wait.
-`waitstart` can be null for a short time after a wait starts. The watchdog treats null as a new wait.
-The same `pg_locks` query, filtered on the backup PIDs, finds the lock waits of the backup itself.
+The rows where `pid = ANY($1)` are the lock waits of the backup itself.
+The watchdog does not use `waitstart`. It measures each wait from the first poll that sees it.
 
 ### Cancellation
 
@@ -492,10 +506,10 @@ The accounts in `DEFINER` clauses must exist before a restore.
 
 ### Experiments
 
-- The workload budgets in [Measurement plan](#measurement-plan).
-- Detection sees PostgreSQL WAL replay and the MySQL replication applier.
-- `client_connection_check_interval` ends a PostgreSQL session that waits for a lock.
+- The workload budgets in [Measurement plan](#measurement-plan). `scripts/measure.sh` measures them.
 - A PostgreSQL schema change before the table locks, or on an object without a lock, makes `pg_dump` fail.
+
+`tests/scenarios.rs` confirms the earlier experiments on every pull request: detection sees PostgreSQL WAL replay and the MySQL replication applier, and `client_connection_check_interval` ends a PostgreSQL session that waits for a lock.
 
 ## Measurement plan
 

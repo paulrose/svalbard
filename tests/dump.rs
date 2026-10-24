@@ -24,6 +24,8 @@ struct Fake {
     stuck: bool,
     /// The failure that `verify` reports.
     verify: Option<Failure>,
+    /// Preflight never gets an answer from the server.
+    silent: bool,
     started: Cell<bool>,
     terminated: bool,
 }
@@ -35,6 +37,7 @@ impl Fake {
             detection,
             stuck: false,
             verify: None,
+            silent: false,
             started: Cell::new(false),
             terminated: false,
         }
@@ -48,6 +51,9 @@ impl Source for Fake {
 
     async fn preflight(&mut self, client_version: &str) -> Result<String, String> {
         assert!(client_version.starts_with("GNU bash"), "{client_version}");
+        if self.silent {
+            future::pending::<()>().await;
+        }
         Ok("test 1.0".to_owned())
     }
 
@@ -203,6 +209,18 @@ async fn failed_checks_prevent_the_dump() {
         assert_eq!(error.kind, kind, "{error}");
         assert!(!fake.started.get(), "{error}");
     }
+}
+
+#[tokio::test]
+async fn silent_server_fails_preflight_after_a_minute() {
+    let mut fake = Fake::new("printf dump", Box::new(session));
+    fake.silent = true;
+    let (error, elapsed) = failure(&mut fake, &safety(), future::pending()).await;
+
+    assert_eq!(error.kind, Failure::Preflight, "{error}");
+    assert!(error.message.contains("longer than 60s"), "{error}");
+    assert!(!fake.started.get(), "{error}");
+    assert!(elapsed < Duration::from_secs(65), "{elapsed:?}");
 }
 
 #[tokio::test]

@@ -1,0 +1,89 @@
+# The settings of scripts/measure.sh on top of compose.yaml, from "Measurement plan" in
+# docs/database-safety.md: the servers keep their data on volumes, with fixed memory and, on a
+# host with 8 or more CPUs, their own CPUs. scripts/measure.sh sets the CPU lists.
+
+services:
+  postgresql:
+    tmpfs: !reset []
+    volumes:
+      - postgresql-data:/var/lib/postgresql
+    cpuset: ${MEASURE_PRIMARY_CPUS:-}
+    mem_limit: 1g
+    memswap_limit: 1g
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/tmp/server.crt
+      - -c
+      - ssl_key_file=/tmp/server.key
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=600
+
+  # A standby needs at least the max_connections of its primary. Feedback keeps the vacuum of
+  # the primary from removing rows that a dump on the standby still reads.
+  postgresql-standby:
+    tmpfs: !reset []
+    volumes:
+      - standby-data:/var/lib/postgresql
+    cpuset: ${MEASURE_REPLICA_CPUS:-}
+    mem_limit: 1g
+    memswap_limit: 1g
+    command: [-c, shared_buffers=128MB, -c, max_connections=600, -c, hot_standby_feedback=on]
+
+  mysql:
+    tmpfs: !reset []
+    volumes:
+      - mysql-data:/var/lib/mysql
+    cpuset: ${MEASURE_PRIMARY_CPUS:-}
+    mem_limit: 2g
+    memswap_limit: 2g
+    command:
+      - --ssl-ca=/certs/ca.crt
+      - --ssl-cert=/certs/server.crt
+      - --ssl-key=/certs/server.key
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=600
+
+  mysql-replica:
+    tmpfs: !reset []
+    volumes:
+      - replica-data:/var/lib/mysql
+    cpuset: ${MEASURE_REPLICA_CPUS:-}
+    mem_limit: 2g
+    memswap_limit: 2g
+    command:
+      - --ssl-ca=/certs/ca.crt
+      - --ssl-cert=/certs/server.crt
+      - --ssl-key=/certs/server.key
+      - --server-id=2
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=600
+
+  ssh:
+    cpuset: ${MEASURE_BACKUP_CPUS:-}
+
+  floci:
+    cpuset: ${MEASURE_BACKUP_CPUS:-}
+
+  tests:
+    cpuset: ${MEASURE_RUNNER_CPUS:-}
+    environment:
+      SVALBARD_MEASURE: "1"
+      SVALBARD_MEASURE_LOAD_CPUS: ${MEASURE_LOAD_CPUS:-}
+      SVALBARD_MEASURE_LAYOUT: ${MEASURE_LAYOUT:-}
+      SVALBARD_MEASURE_WINDOW: ${SVALBARD_MEASURE_WINDOW:-300}
+      SVALBARD_MEASURE_SCALE: ${SVALBARD_MEASURE_SCALE:-200}
+
+volumes:
+  postgresql-data:
+  standby-data:
+  mysql-data:
+  replica-data:

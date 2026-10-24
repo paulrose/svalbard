@@ -33,6 +33,8 @@ const INTERVAL: Duration = Duration::from_secs(1);
 const GRACE: Duration = Duration::from_secs(10);
 /// Bytes written between two free-space checks.
 const SPACE_CHECK: u64 = 64 << 20;
+/// Time for the checks before the dump. `dump_timeout` starts only with the client.
+const PREFLIGHT: Duration = Duration::from_secs(60);
 
 /// Dumps `source` into the run directory.
 ///
@@ -88,7 +90,12 @@ async fn dump_to<S: Source>(
         Ok((client_version, server_version))
     };
     let (client_version, server_version) = tokio::select! {
-        result = preflight => result?,
+        result = time::timeout(PREFLIGHT, preflight) => result.map_err(|_| {
+            Error::new(
+                Failure::Preflight,
+                format!("the preflight took longer than {PREFLIGHT:?}"),
+            )
+        })??,
         () = cancel.as_mut() => return Err(cancelled()),
     };
 

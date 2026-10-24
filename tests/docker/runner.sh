@@ -9,6 +9,11 @@ rpm --install --quiet \
   "https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm"
 microdnf install --assumeyes gcc make tar gzip openssh-clients "postgresql${POSTGRESQL_VERSION}" \
   >/dev/null
+# scripts/measure.sh also needs sysbench, from EPEL, and taskset.
+if [ -n "${SVALBARD_MEASURE:-}" ]; then
+  rpm --install --quiet https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm >/dev/null
+  microdnf install --assumeyes sysbench util-linux >/dev/null
+fi
 curl --proto '=https' --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs |
   sh -s -- -y --quiet --no-modify-path --profile minimal --default-toolchain 1.99.1 \
     --component clippy --component rustfmt >/dev/null
