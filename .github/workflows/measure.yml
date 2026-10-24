@@ -5,6 +5,9 @@ name: Measure
 # say so.
 on:
   workflow_dispatch:
+  # Temporary: one run from the branch of #15, before the workflow is on main.
+  push:
+    branches: [test/safety-scenarios]
 
 permissions:
   contents: read
