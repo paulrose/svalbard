@@ -471,9 +471,10 @@ fn stats<'a>(
 
 /// One `svalbard backup` run.
 struct Backup {
-    /// When the dump started and ended, from the progress lines.
+    /// When the dump started and ended, from the progress lines, and when Svalbard exited.
     dumping: f64,
     dumped: Option<f64>,
+    ended: f64,
     result: serde_json::Value,
     /// The peak resident memory of the Svalbard process, in KiB.
     peak: u64,
@@ -529,6 +530,7 @@ async fn backup(setup: &Setup, db: Db, current: &RefCell<Option<String>>) -> Bac
     Backup {
         dumping: dumping.unwrap_or_else(|| panic!("no dump started:\n{stderr}")),
         dumped,
+        ended: epoch(),
         result,
         peak,
     }
@@ -550,7 +552,7 @@ struct Window {
     end: f64,
     load: Load,
     backups: Vec<Backup>,
-    /// The remote path of the dump of the last backup.
+    /// The remote path of the dump of the last complete backup.
     dump: Option<String>,
     /// The highest value of each sample.
     samples: Vec<(&'static str, f64)>,
@@ -567,7 +569,7 @@ impl Window {
             .map(|b| {
                 (
                     b.dumping.max(self.start),
-                    b.dumped.unwrap_or(self.end).min(self.end),
+                    b.dumped.unwrap_or(b.ended).min(self.end),
                 )
             })
             .filter(|(from, to)| from < to)
@@ -593,18 +595,22 @@ async fn window(db: Db, name: &str, rate: f64, backups: Option<bool>) -> Window 
         };
         let (setup, dir) = sftp(db, &format!("{}-{slug}", db.slug()), "measure", replica);
         let mut done: Vec<Backup> = Vec::new();
+        // The files of the last complete backup, for the restore.
+        let mut kept: Option<Vec<String>> = None;
         // A backup that would start in the last 10 s would mostly run after the load.
         while Instant::now() + Duration::from_secs(10) < ends {
-            // Only the last backup stays, for the restore.
-            ssh::shell(&format!("rm -f {}/*", ssh::quote(&dir)));
             let backup = backup(&setup, db, &current).await;
-            assert_eq!(backup.result["result"], "complete", "{}", backup.result);
+            if backup.result["result"] == "complete" {
+                let files = ["data", "record"]
+                    .map(|key| format!("{dir}/{}", backup.result[key].as_str().unwrap()));
+                if let Some(old) = kept.replace(files.to_vec()) {
+                    let old: Vec<String> = old.iter().map(|path| ssh::quote(path)).collect();
+                    ssh::shell(&format!("rm -f -- {}", old.join(" ")));
+                }
+            }
             done.push(backup);
         }
-        let dump = done
-            .last()
-            .map(|b| format!("{dir}/{}", b.result["data"].as_str().unwrap()));
-        (done, dump)
+        (done, kept.map(|files| files[0].clone()))
     };
     let sample = async {
         let mut highest: Vec<(&'static str, f64)> = Vec::new();
@@ -906,11 +912,15 @@ async fn measure(db: Db) {
         )
         .await,
     ];
-    // S1: the last dump of each window with backups restores, without the load.
+    // S1: the last complete dump of each window with backups restores, without the load.
+    let mut restored = Vec::new();
     for (window, replica) in [(&windows[1], false), (&windows[3], true)] {
-        let dump = window.dump.as_ref().expect("a window with backups");
+        let Some(dump) = &window.dump else {
+            continue;
+        };
         db.assert_restores(&ssh::download(dump), replica).await;
         ssh::shell(&format!("rm -f -- {}", ssh::quote(dump)));
+        restored.push(window.name.as_str());
     }
     let current = RefCell::new(None);
     let bucket = floci::bucket(&format!("{}-multipart", db.slug()), None).await;
@@ -941,8 +951,10 @@ async fn measure(db: Db) {
         env::var("SVALBARD_MEASURE_LAYOUT").unwrap_or_else(|_| "not pinned".to_owned()),
         window_length().as_secs()
     );
-    println!("| Window | Dump time | p50 | p99 | Throughput | Errors | Records | Servers |");
-    println!("| --- | --- | --- | --- | --- | --- | --- | --- |");
+    println!(
+        "| Window | Backups | Dump time | p50 | p99 | Throughput | Errors | Records | Servers |"
+    );
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     for window in &windows {
         let stats = stats(window.load.transactions.iter(), &window.intervals());
         let records: Vec<String> = window
@@ -950,9 +962,18 @@ async fn measure(db: Db) {
             .iter()
             .map(|(name, value)| format!("{name} {value:.0}"))
             .collect();
+        let failed = window
+            .backups
+            .iter()
+            .filter(|b| b.result["result"] != "complete")
+            .count();
         println!(
-            "| {} | {:.0}% | {} | {} | {:.1}% | {} | {} | {} |",
+            "| {} | {} | {:.0}% | {} | {} | {:.1}% | {} | {} | {} |",
             window.name,
+            match failed {
+                0 => window.backups.len().to_string(),
+                _ => format!("{} ({failed} failed)", window.backups.len()),
+            },
             if window.backups.is_empty() {
                 0.0
             } else {
@@ -1030,8 +1051,23 @@ async fn measure(db: Db) {
         multipart.result["size"],
         met(peaks.iter().all(|&peak| peak <= 64 * 1024))
     );
+    for window in &windows {
+        for backup in window
+            .backups
+            .iter()
+            .filter(|b| b.result["result"] != "complete")
+        {
+            println!(
+                "\nA backup in \"{}\" failed with `{}`: {}",
+                window.name,
+                backup.result["error"].as_str().unwrap_or(""),
+                backup.result["message"].as_str().unwrap_or("")
+            );
+        }
+    }
     println!(
-        "\nS1: the last dump of each window with backups restored, and the fixture data matched."
+        "\nS1: the last complete dump of these windows restored, and the fixture data matched: {}.",
+        restored.join(", ")
     );
     println!(
         "\nS4 under load: the backup failed with `{wait_result}` after {waited:.1} s; p99 during \

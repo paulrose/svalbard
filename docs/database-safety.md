@@ -59,6 +59,8 @@ The standby delays replay up to `max_standby_streaming_delay` (default 30 s), th
 While replay waits, replication lag grows. If the delay is `-1`, replay can wait until the dump ends.
 The watchdog treats WAL replay that waits for a backup lock as contention, with any `max_standby_streaming_delay`.
 It does not see replay that waits for the dump's snapshot, because that wait holds no lock.
+Under write load, VACUUM on the primary can truncate empty pages at the end of a table. The replay of the truncation needs an `ACCESS EXCLUSIVE` lock, so the watchdog cancels a dump on the standby with `contention`.
+The storage parameter `vacuum_truncate = false` on frequently updated tables prevents this.
 
 `hot_standby_feedback = on` prevents cleanup conflicts. It also holds back vacuum on the primary for all databases, which can cause bloat.
 Svalbard does not change this setting.
