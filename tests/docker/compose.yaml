@@ -93,6 +93,9 @@ services:
         exec gosu postgres postgres -c ssl=on -c ssl_cert_file=/tmp/server.crt \
           -c ssl_key_file=/tmp/server.key "$$@"
       - --
+    # The tests on the primary change shared catalogs in parallel. Without feedback, replay of
+    # their cleanup can wait for the snapshot of a dump on the standby, which no lock shows.
+    command: [-c, hot_standby_feedback=on]
     healthcheck:
       test:
         - CMD-SHELL

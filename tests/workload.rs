@@ -42,9 +42,10 @@ fn window_length() -> Duration {
     Duration::from_secs(seconds)
 }
 
-/// The pgbench scale. MySQL gets 4 tables of 5,000 rows per scale unit.
+/// The pgbench scale. MySQL gets 4 tables of 5,000 rows per scale unit. The default of 100 is
+/// about 1.5 GB for PostgreSQL and 0.5 GB for MySQL: more than the memory of each server.
 fn scale() -> u64 {
-    env::var("SVALBARD_MEASURE_SCALE").map_or(200, |value| value.parse().unwrap())
+    env::var("SVALBARD_MEASURE_SCALE").map_or(100, |value| value.parse().unwrap())
 }
 
 fn epoch() -> f64 {

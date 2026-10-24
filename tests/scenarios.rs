@@ -185,18 +185,19 @@ impl Fixture {
                 client.query_one(&query, &[]).await.unwrap().get(0)
             }
             Fixture::Mysql(fixture) => {
-                // `trx_started` has whole seconds.
+                // information_schema.innodb_trx fails on MySQL 9 while another session runs a
+                // statement with 4-byte characters. TIMER_WAIT of an active transaction is its
+                // age in picoseconds.
                 let age: Option<Option<f64>> = fixture
                     .client()
                     .await
                     .exec_first(
-                        "SELECT CAST(MAX(TIMESTAMPDIFF(MICROSECOND, x.trx_started, NOW(6)))
-                           / 1000000 AS DOUBLE)
-                         FROM information_schema.innodb_trx x
-                         JOIN performance_schema.threads t
-                           ON t.PROCESSLIST_ID = x.trx_mysql_thread_id
+                        "SELECT CAST(MAX(x.TIMER_WAIT) / 1e12 AS DOUBLE)
+                         FROM performance_schema.events_transactions_current x
+                         JOIN performance_schema.threads t USING (THREAD_ID)
                          JOIN performance_schema.user_variables_by_thread v USING (THREAD_ID)
-                         WHERE v.VARIABLE_NAME = 'svalbard_run' AND t.PROCESSLIST_USER = ?",
+                         WHERE x.STATE = 'ACTIVE' AND v.VARIABLE_NAME = 'svalbard_run'
+                           AND t.PROCESSLIST_USER = ?",
                         (&fixture.database,),
                     )
                     .await

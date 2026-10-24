@@ -58,6 +58,7 @@ Use a source in this order of preference:
 The standby delays replay up to `max_standby_streaming_delay` (default 30 s), then cancels the dump. The backup fails.
 While replay waits, replication lag grows. If the delay is `-1`, replay can wait until the dump ends.
 The watchdog treats WAL replay that waits for a backup lock as contention, with any `max_standby_streaming_delay`.
+It does not see replay that waits for the dump's snapshot, because that wait holds no lock.
 
 `hot_standby_feedback = on` prevents cleanup conflicts. It also holds back vacuum on the primary for all databases, which can cause bloat.
 Svalbard does not change this setting.
