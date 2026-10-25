@@ -140,12 +140,15 @@ jobs:
           gpg --dearmor <"$RUNNER_TEMP/mysql.asc" | sudo tee /etc/apt/keyrings/mysql.gpg >/dev/null
           echo "deb [signed-by=/etc/apt/keyrings/mysql.gpg] https://repo.mysql.com/apt/ubuntu noble mysql-$MYSQL_SERIES-lts" |
             sudo tee /etc/apt/sources.list.d/mysql.list
+          # Otherwise apt replaces the runner's MySQL 8.0 server with Oracle's server.
+          sudo apt-get remove --yes mysql-server mysql-server-8.0 mysql-server-core-8.0
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends mysql-community-client
       - run: svalbard --version && pg_dump --version && mysqldump --version
       - name: Prepare the servers
         run: |
-          docker compose up --wait postgresql mysql floci ssh
+          # Without --no-deps, Compose runs `certs` again, which replaces the CA.
+          docker compose up --wait --no-deps --no-recreate postgresql mysql floci ssh
           docker compose cp postgresql:/certs/ca.crt "$RUNNER_TEMP/ca.crt"
           docker compose cp ssh:/keys/client "$RUNNER_TEMP/ssh-key"
           docker compose cp ssh:/keys/known_hosts "$RUNNER_TEMP/known_hosts"
@@ -168,8 +171,9 @@ jobs:
           SQL
           docker compose exec -T --env MYSQL_PWD=mysql mysql mysql --user=root <<SQL
           CREATE DATABASE app;
-          CREATE TABLE app.items (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL);
-          INSERT INTO app.items WITH RECURSIVE n (i) AS (
+          USE app;
+          CREATE TABLE items (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL);
+          INSERT INTO items WITH RECURSIVE n (i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000
           ) SELECT i, MD5(i) FROM n;
           CREATE USER backup IDENTIFIED BY '$password';
@@ -237,7 +241,9 @@ jobs:
           >"$RUNNER_TEMP/out/cancelled.json" 2>"$RUNNER_TEMP/out/cancelled.err"
       - name: Show the outputs
         if: always()
-        run: for file in "$RUNNER_TEMP"/out/*; do echo "== ${file##*/}"; cat "$file"; done
+        run: |
+          shopt -s nullglob
+          for file in "$RUNNER_TEMP"/out/*; do echo "== ${file##*/}"; cat "$file"; done
 
       - name: Restore the PostgreSQL backup
         working-directory: ${{ runner.temp }}/restore

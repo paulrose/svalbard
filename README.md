@@ -3,6 +3,64 @@
 Svalbard is an open-source Rust CLI for database backups.
 It backs up PostgreSQL or MySQL to Amazon S3, Cloudflare R2, another S3-compatible service, or an SSH server with SFTP or SCP.
 
+## Install
+
+Each release has an archive for Linux x86_64 and a `SHA256SUMS` file.
+The archive `svalbard-<version>-x86_64-unknown-linux-gnu.tar.gz` holds the `svalbard` binary, `LICENSE` and this README.
+The binary runs on Linux with glibc 2.39 or newer, such as Ubuntu 24.04.
+
+```sh
+version=0.1.0
+gh release download "v$version" --repo paulrose/svalbard \
+  --pattern "svalbard-$version-x86_64-unknown-linux-gnu.tar.gz" --pattern SHA256SUMS
+sha256sum --check SHA256SUMS
+tar --extract --gzip --file "svalbard-$version-x86_64-unknown-linux-gnu.tar.gz"
+./svalbard-$version-x86_64-unknown-linux-gnu/svalbard --version
+```
+
+`SHA256SUMS` from the same release finds a damaged download, but not a changed release.
+For CI, keep the SHA-256 of the archive in the workflow, as in the [CI example](#run-in-ci).
+The repository is private, so the download needs a token: see [Private access](#private-access).
+
+### Native clients
+
+Svalbard runs the native clients from `PATH`, and checks their versions before the dump.
+
+| For | Client |
+| --- | --- |
+| PostgreSQL 15 to 18 | `pg_dump` 15 to 18, of the server's major version or newer. A restore needs `pg_restore` of the same version or newer. |
+| MySQL 8.4 or 9.7 | `mysqldump` from Oracle MySQL, of the server's series: 8.4 for MySQL 8.4, 9.7 for MySQL 9.7. Svalbard rejects the MariaDB client. A restore needs `mysql`. |
+| SFTP or SCP | OpenSSH `ssh`, `sftp` and `scp`. `scp` must accept `-O`: OpenSSH 9.0 or newer, or a distribution that backports it. |
+
+On Ubuntu 24.04, install the database clients from the PostgreSQL and MySQL APT repositories.
+GitHub's `ubuntu-24.04` runner has `pg_dump` 16 and `mysqldump` 8.0, and Svalbard rejects `mysqldump` 8.0.
+
+```sh
+# pg_dump 18. The runner has postgresql-common. Elsewhere, install it first.
+sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+sudo apt-get install --yes --no-install-recommends postgresql-client-18
+# /usr/bin/pg_dump can select another installed version.
+export PATH="/usr/lib/postgresql/18/bin:$PATH"
+```
+
+```sh
+# mysqldump 8.4. For 9.7, use mysql-9.7-lts.
+curl --fail --silent --show-error --location --output mysql.asc \
+  https://repo.mysql.com/RPM-GPG-KEY-mysql-2025
+gpg --show-keys --with-colons mysql.asc | awk -F: '$1 == "pub" { getline; print $10 }'
+# Continue only if the fingerprint is BCA43417C3B485DD128EC6D4B7B3B788A8D3785C.
+gpg --dearmor <mysql.asc | sudo tee /etc/apt/keyrings/mysql.gpg >/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/mysql.gpg] https://repo.mysql.com/apt/ubuntu noble mysql-8.4-lts" |
+  sudo tee /etc/apt/sources.list.d/mysql.list
+# On the runner. Otherwise apt replaces its MySQL 8.0 server with Oracle's server too.
+sudo apt-get remove --yes mysql-server mysql-server-8.0 mysql-server-core-8.0
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends mysql-community-client
+```
+
+The fingerprint is the key of MySQL Release Engineering.
+If Oracle publishes a new key, compare its fingerprint with the one in the MySQL documentation before you change it here.
+
 ## Build and run
 
 Install Rust with [rustup](https://rustup.rs/).
@@ -46,7 +104,7 @@ Unknown keys, empty values and invalid values are errors.
 | `source.tls` | `verify-full` | `verify-full` or `disable` |
 | `source.tls_ca_file` | The system trust store | Path to a PEM file with the CA certificates |
 | `destination.type` | Required | `s3`, `r2`, `sftp` or `scp` |
-| `destination.prefix` | Empty | Prefix for object keys or file names. For SSH: letters, digits, `.`, `_`, `-` and `/` |
+| `destination.prefix` | Empty | Prefix for object keys or file names. For SSH: letters, digits, `.`, `_`, `-` and `/`, and its directories must exist |
 | `destination.upload_timeout` | `1h` | `1min` to `24h` |
 | `destination.bucket` | Required for S3 and R2 | Bucket name |
 | `destination.region` | From the AWS configuration, `auto` for R2 | AWS Region |
@@ -192,7 +250,8 @@ SIGINT and SIGTERM cancel the backup. Svalbard ends the backup sessions, stops t
 This cleanup can take up to about a minute. If a CI system sends SIGKILL sooner, no cleanup runs.
 Then `PR_SET_PDEATHSIG` stops the clients, the server-side backstops end the database sessions, and the lifecycle rule (S3) or the `.partial` names (SSH) mark what remains.
 The run directory `svalbard-<run id>` also remains in `safety.staging_dir`, with the partial dump and, if the dump was running, the file with the database password. Delete it.
-GitHub Actions sends SIGINT, then SIGTERM, and then SIGKILL about 10 s after it cancels a job.
+When GitHub Actions cancels a job, it sends SIGINT and then SIGTERM to the entry process of the running step only, and kills the step's processes after 10 s.
+Start Svalbard with `exec` there, as in the [CI example](#run-in-ci).
 
 ## Output and exit codes
 
@@ -216,6 +275,116 @@ Errors always go to stderr. No output contains a secret.
 | `3` | The configuration is invalid. |
 | `4` | The backup failed, and Svalbard cleaned up. The backup can run again. |
 | `5` | The backup failed, and the cleanup failed too (`cleanup_failed`). A backup session, the run directory or an unfinished upload may remain. The message says which. |
+
+## Run in CI
+
+A CI job installs the archive and the native clients, gives the secrets in environment variables, and runs `svalbard backup --json`.
+The exit code fails the job when the backup fails.
+[`examples/github-actions/backup-cli.yml`](examples/github-actions/backup-cli.yml) is a complete GitHub Actions workflow for PostgreSQL to SFTP.
+The runner must reach the database and the destination.
+
+### Secrets
+
+- Database password: `SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}` in the `env` of the backup step.
+- R2: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from secrets, in the same way.
+- S3: no stored keys. Give the workflow `id-token: write`, and let it assume an IAM role through OIDC before the backup:
+
+  ```yaml
+  - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+    with:
+      role-to-assume: arn:aws:iam::123456789012:role/svalbard-backup
+      aws-region: eu-west-1
+  ```
+
+  The role needs the permissions in [Storage](#storage).
+- SSH: write the private key from a secret to a file that only the job's user can read, and set `SVALBARD_DESTINATION_IDENTITY_FILE` to it.
+  The runner deletes `$RUNNER_TEMP` after the job.
+- known_hosts: commit the server's line next to the configuration. It is public, and a review shows every change.
+  Take the line from the server, for example from `/etc/ssh/ssh_host_ed25519_key.pub`, not from an unchecked `ssh-keyscan`.
+  For a port other than 22, the host is `[backup.example.com]:2222`.
+
+GitHub masks secrets in the log, and no Svalbard output contains them.
+
+### One backup per database
+
+```yaml
+concurrency:
+  group: svalbard-db.example.com-app
+  cancel-in-progress: false
+```
+
+GitHub runs one job of a concurrency group at a time, in one repository.
+A new run waits for the running backup and never cancels it. A newer run replaces a run that waits, so at most one backup waits.
+Use the same group in every workflow of the repository that backs up the database.
+
+### Cancellation and timeouts
+
+When GitHub cancels a job, or a job or step reaches `timeout-minutes`, it sends SIGINT and then SIGTERM to the entry process of the running step only.
+After 10 s, it kills the processes of the step.
+Start Svalbard with `exec`, so that the entry process is Svalbard and it can clean up. Without `exec`, the shell gets the signals, and Svalbard stops without cleanup.
+
+Give the job a `timeout-minutes` above `safety.dump_timeout` and `destination.upload_timeout` together, so that the limits of Svalbard end a slow backup first.
+
+### Results and failures
+
+With `--json`, stdout gets the result, and the log shows it. Progress and errors go to stderr.
+To use the result in later steps, write stdout to a file:
+
+```yaml
+- name: Back up
+  id: backup
+  run: exec svalbard backup --config svalbard.toml --json >"$RUNNER_TEMP/backup.json"
+- name: Show the result
+  if: always() && steps.backup.outcome != 'skipped'
+  run: jq . "$RUNNER_TEMP/backup.json"
+```
+
+A failed backup exits with 4 or 5 (see [Output and exit codes](#output-and-exit-codes)), so the step and the job fail.
+After 4, the next run can start normally. After 5, read the message: a backup session, the run directory or an unfinished upload may remain.
+
+### Private access
+
+The repository is private, so the release download needs a token with read access to it.
+Create a fine-grained personal access token for the resource owner `paulrose`, with access to the repository `paulrose/svalbard` only and the permission Contents: Read-only.
+Store it as a secret such as `SVALBARD_TOKEN`, and give it only to the download step, as `GH_TOKEN`.
+
+Keep this token apart from the database and storage credentials. It reads the Svalbard source and releases, not the backups.
+A workflow in `paulrose/svalbard` itself can use `github.token` instead.
+
+## Restore
+
+A backup is the dump and its completion record (see [Storage](#storage)).
+
+1. Download both, for example with `aws s3 cp s3://<bucket>/<key> .` or with `sftp`.
+2. Check the dump against the record:
+
+   ```sh
+   echo "$(jq --raw-output .sha256 20261022T134500Z-<run id>.json)  20261022T134500Z-<run id>.dump" |
+     sha256sum --check
+   ```
+
+3. Restore it into a new database with the native client.
+
+PostgreSQL:
+
+```sh
+createdb --template=template0 app_restored
+pg_restore --exit-on-error --dbname=app_restored 20261022T134500Z-<run id>.dump
+```
+
+The dump has no roles, tablespaces or other global objects. The roles that own objects or have grants in the dump must exist before the restore.
+
+MySQL:
+
+```sh
+mysql --defaults-extra-file=restore.cnf --execute='CREATE DATABASE app_restored'
+mysql --defaults-extra-file=restore.cnf app_restored <20261022T134500Z-<run id>.sql
+```
+
+`restore.cnf` is an option file with `[client]`, `host`, `user` and `password`, readable only by you, so that no argument holds the password.
+The dump names no database, so it restores into the database that you give.
+It has no accounts or grants, and the accounts in its `DEFINER` clauses must exist.
+A dump from a replica restores its events disabled: see [MySQL replica](docs/database-safety.md#mysql-replica).
 
 ## Development
 
@@ -276,11 +445,28 @@ scripts/test-r2.sh
 The `r2` CI job runs these tests in the `svalbard-ci` bucket for pull requests from this repository, for pushes to `main`, and on demand.
 It reads the keys from the repository secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, and the endpoint and bucket from the variables `R2_ENDPOINT` and `R2_BUCKET`.
 
+The `package` CI job builds the release archive with [`scripts/package.sh`](scripts/package.sh).
+The `clean-runner` job installs it on a runner without Rust, with the native clients as in [Install](#install), and runs the steps of the [CI example](#run-in-ci).
+Its servers are those of the Docker tests, which [`tests/docker/ports.yaml`](tests/docker/ports.yaml) publishes on 127.0.0.1.
+It backs up PostgreSQL to SFTP and MySQL to S3, restores both as in [Restore](#restore), and checks a wrong password, a cancellation by a step timeout, and that no output contains a password.
+
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 
 Create a branch for each change. Submit changes through a pull request.
 Keep PRs focused and include relevant check results. Review the diff before a solo merge.
 GitHub deletes merged head branches automatically.
+
+### Releases
+
+1. Change `version` in `Cargo.toml` in a pull request.
+2. After the merge, when CI is green on `main`, tag the merge commit and push the tag:
+
+   ```sh
+   git tag v0.1.0 <commit>
+   git push origin v0.1.0
+   ```
+
+3. The [Release workflow](.github/workflows/release.yml) builds the archive, checks that the tag matches the version, and creates the GitHub release with the archive and `SHA256SUMS`.
 
 ## Website preview
 
