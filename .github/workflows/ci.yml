@@ -175,7 +175,7 @@ jobs:
           CREATE TABLE items (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL);
           INSERT INTO items WITH RECURSIVE n (i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000
-          ) SELECT i, MD5(i) FROM n;
+          ) SELECT i, CONCAT('item ', i) FROM n;
           CREATE USER backup IDENTIFIED BY '$password';
           GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON app.* TO backup;
           GRANT SHOW_ROUTINE ON *.* TO backup;
@@ -295,7 +295,7 @@ jobs:
           jq --exit-status '.result == "failed" and .stage == "dump" and .error == "preflight"' \
             "$RUNNER_TEMP/out/wrong.json"
           [ "$(aws --endpoint-url http://127.0.0.1:4566 s3api list-objects-v2 --bucket backups \
-            --prefix wrong/ --query KeyCount)" = 0 ]
+            --prefix wrong/ --query 'length(Contents || `[]`)' --output text)" = 0 ]
       - name: Check the cancellation
         env:
           OUTCOME: ${{ steps.cancelled.outcome }}
