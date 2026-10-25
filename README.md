@@ -288,16 +288,20 @@ The runner must reach the database and the destination.
 
 - Database password: `SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}` in the `env` of the backup step.
 - R2: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from secrets, in the same way.
-- S3: no stored keys. Give the workflow `id-token: write`, and let it assume an IAM role through OIDC before the backup:
+- S3: access keys or a role, whichever your account uses. Both need the permissions in [Storage](#storage).
+  - Access keys: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from secrets, and the region in `destination.region` or `AWS_REGION`.
+  - A role through OIDC: give the job `id-token: write`, and assume the role before the backup.
+    The action sets temporary credentials with `AWS_SESSION_TOKEN`, and the region:
 
-  ```yaml
-  - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-    with:
-      role-to-assume: arn:aws:iam::123456789012:role/svalbard-backup
-      aws-region: eu-west-1
-  ```
+    ```yaml
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: arn:aws:iam::123456789012:role/svalbard-backup
+        aws-region: eu-west-1
+    ```
 
-  The role needs the permissions in [Storage](#storage).
+    The `sub` condition of the role's trust policy must match the subject of the repository's tokens.
+    `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` shows its prefix, which can hold the IDs of the owner and the repository, such as `repo:owner@123/repo@456`.
 - SSH: write the private key from a secret to a file that only the job's user can read, and set `SVALBARD_DESTINATION_IDENTITY_FILE` to it.
   The runner deletes `$RUNNER_TEMP` after the job.
 - known_hosts: commit the server's line next to the configuration. It is public, and a review shows every change.
@@ -475,18 +479,27 @@ scripts/measure.sh 18 8.4
 
 The [Measure workflow](.github/workflows/measure.yml) runs the script for each version pair on demand. Its runners have 2 CPUs, which the servers, the load and the backup share.
 
-The R2 tests need a real R2 bucket. [`scripts/test-r2.sh`](scripts/test-r2.sh) runs them in Docker.
-Set `SVALBARD_TEST_R2_ENDPOINT` and `SVALBARD_TEST_R2_BUCKET`, and the keys of an R2 API token with Object Read & Write on the bucket in `SVALBARD_TEST_R2_ACCESS_KEY_ID` and `SVALBARD_TEST_R2_SECRET_ACCESS_KEY`.
-The tests write under `svalbard-test/` and remove what they wrote.
-The script also starts PostgreSQL and MySQL, because the R2 tests include backups through the CLI with native restores.
-Give the bucket a lifecycle rule that deletes objects under `svalbard-test/` after a day, for tests that fail before their cleanup.
+The live tests need a real bucket in Cloudflare R2 or Amazon S3. [`scripts/test-live.sh`](scripts/test-live.sh) runs them in Docker.
+They upload in one request and in parts, and check the SHA-256 checksums that the service keeps, the record, the cleanup after a cancellation and the access errors.
+They also back up PostgreSQL and MySQL through the CLI and restore the dumps with the native clients, so the script starts both servers.
+
+- R2: set `SVALBARD_TEST_R2_ENDPOINT` and `SVALBARD_TEST_R2_BUCKET`, and the keys of an R2 API token with Object Read & Write on the bucket in `SVALBARD_TEST_R2_ACCESS_KEY_ID` and `SVALBARD_TEST_R2_SECRET_ACCESS_KEY`.
+- S3: set `SVALBARD_TEST_AWS_BUCKET` and `AWS_REGION`, and the credentials in `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN` for temporary credentials.
+  They need the permissions in [Storage](#storage) on `svalbard-test/`, and `s3:GetObject`, `s3:DeleteObject` and `s3:ListBucket` for the checks and the cleanup.
 
 ```sh
-scripts/test-r2.sh
+scripts/test-live.sh r2
+scripts/test-live.sh aws
 ```
 
-The `r2` CI job runs these tests in the `svalbard-ci` bucket for pull requests from this repository, for pushes to `main`, and on demand.
-It reads the keys from the repository secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, and the endpoint and bucket from the variables `R2_ENDPOINT` and `R2_BUCKET`.
+The tests write under `svalbard-test/` and remove what they wrote.
+Give the bucket a lifecycle rule that deletes objects under `svalbard-test/` after a day, for tests that fail before their cleanup, and one with `AbortIncompleteMultipartUpload`.
+
+CI runs the live tests for pull requests from this repository, for pushes to `main`, and on demand:
+
+- `r2` in the `svalbard-ci` bucket, with the keys in the repository secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, and the endpoint and bucket in the variables `R2_ENDPOINT` and `R2_BUCKET`.
+- `aws-keys` in the `svalbard-testing` bucket, with the access keys in the repository secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- `aws-oidc` in the same bucket, with temporary credentials of the role in the repository variable `AWS_ROLE_ARN`, which the job assumes through OIDC.
 
 The `package` CI job builds the release archive with [`scripts/package.sh`](scripts/package.sh).
 The `clean-runner` job installs it on a fresh runner that builds nothing, with the native clients from [`action/clients.sh`](action/clients.sh), which runs the commands in [Native clients](#native-clients). Then it runs the steps of the [CI example](#run-in-ci).

@@ -1,6 +1,6 @@
 # PostgreSQL and MySQL servers with TLS, a PostgreSQL hot standby, a MySQL replica, a MySQL server
 # without performance_schema, the Floci S3 emulator, an OpenSSH server, and the test runners.
-# scripts/test-integration.sh runs `tests`, and scripts/test-r2.sh runs `r2`.
+# scripts/test-integration.sh runs `tests`, and scripts/test-live.sh runs `live`.
 # The servers publish no ports, so only the runner on the Compose network can reach them.
 # ports.yaml publishes them on 127.0.0.1 for the clean-runner CI job.
 # Nothing is built, and nothing is written to the host: the scripts remove the containers,
@@ -298,7 +298,7 @@ services:
       mysql-nops:
         condition: service_healthy
 
-  r2:
+  live:
     <<: *runner
     volumes:
       - ../..:/svalbard:ro
@@ -310,11 +310,15 @@ services:
       - SVALBARD_TEST_POSTGRESQL_CA=/certs/ca.crt
       - SVALBARD_TEST_MYSQL=mysql://root:mysql@mysql:3306/mysql
       - SVALBARD_TEST_MYSQL_CA=/certs/ca.crt
-      # Names only: the values come from scripts/test-r2.sh, never from arguments.
+      # Names only: the values come from scripts/test-live.sh, never from arguments.
+      - SVALBARD_TEST_LIVE
       - SVALBARD_TEST_R2_ENDPOINT
       - SVALBARD_TEST_R2_BUCKET
+      - SVALBARD_TEST_AWS_BUCKET
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+      - AWS_REGION
     depends_on:
       postgresql:
         condition: service_healthy

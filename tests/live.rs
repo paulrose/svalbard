@@ -1,5 +1,5 @@
-//! Compatibility tests against a real Cloudflare R2 bucket. Run them in Docker with
-//! `scripts/test-r2.sh`.
+//! Compatibility tests against a real bucket in Cloudflare R2 or Amazon S3. Run them in Docker
+//! with `scripts/test-live.sh r2` or `scripts/test-live.sh aws`.
 //!
 //! Each backup goes under `svalbard-test/`, and each test removes what it wrote. A lifecycle rule
 //! on the test buckets removes what a failed test leaves. The CLI tests restore with the native
@@ -16,6 +16,7 @@ use std::{
 
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::{Client, presigning::PresigningConfig, types::ChecksumMode};
+use aws_smithy_types::base64;
 use common::{
     cli::{self, MYSQL_SECRETS, POSTGRESQL_SECRETS, Setup},
     hex, mysql, postgresql, staged, store,
@@ -28,15 +29,37 @@ use svalbard::{
 };
 
 fn var(name: &str) -> String {
-    env::var(name).unwrap_or_else(|_| panic!("{name} must be set: run scripts/test-r2.sh"))
+    env::var(name).unwrap_or_else(|_| panic!("{name} must be set: run scripts/test-live.sh"))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Service {
+    R2,
+    Aws,
+}
+
+fn service() -> Service {
+    match var("SVALBARD_TEST_LIVE").as_str() {
+        "r2" => Service::R2,
+        "aws" => Service::Aws,
+        other => panic!("SVALBARD_TEST_LIVE is `{other}`: use r2 or aws"),
+    }
 }
 
 fn bucket() -> String {
-    var("SVALBARD_TEST_R2_BUCKET")
+    match service() {
+        Service::R2 => var("SVALBARD_TEST_R2_BUCKET"),
+        Service::Aws => var("SVALBARD_TEST_AWS_BUCKET"),
+    }
 }
 
-/// The destination of `run`, configured as a user would: the type, the endpoint and the bucket.
+/// The destination of `run`, configured as a user would. For S3, the region comes from
+/// `AWS_REGION`.
 fn destination(run: &Run) -> config::Destination {
+    let (r#type, endpoint) = match service() {
+        Service::R2 => ("r2", Some(var("SVALBARD_TEST_R2_ENDPOINT"))),
+        Service::Aws => ("s3", None),
+    };
     let flags = Settings {
         source: SourceSettings {
             r#type: Some("postgresql".to_owned()),
@@ -46,10 +69,10 @@ fn destination(run: &Run) -> config::Destination {
             ..SourceSettings::default()
         },
         destination: DestinationSettings {
-            r#type: Some("r2".to_owned()),
+            r#type: Some(r#type.to_owned()),
             bucket: Some(bucket()),
             prefix: Some(format!("svalbard-test/{}/", run.id)),
-            endpoint: Some(var("SVALBARD_TEST_R2_ENDPOINT")),
+            endpoint,
             ..DestinationSettings::default()
         },
         ..Settings::default()
@@ -59,12 +82,13 @@ fn destination(run: &Run) -> config::Destination {
         .destination
 }
 
-/// A client with the same keys, for checking the bucket.
+/// A client with the same credentials, for checking the bucket.
 async fn client() -> Client {
-    let config = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new("auto"))
-        .load()
-        .await;
+    let defaults = aws_config::defaults(BehaviorVersion::latest());
+    if service() == Service::Aws {
+        return Client::new(&defaults.load().await);
+    }
+    let config = defaults.region(Region::new("auto")).load().await;
     let config = aws_sdk_s3::config::Builder::from(&config)
         .endpoint_url(var("SVALBARD_TEST_R2_ENDPOINT"))
         .force_path_style(true)
@@ -144,7 +168,7 @@ async fn download(client: &Client, key: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
 async fn dump_and_record_round_trip() {
     let client = client().await;
 
@@ -173,14 +197,37 @@ async fn dump_and_record_round_trip() {
             .send()
             .await
             .unwrap();
-        // R2 keeps the SHA-256 of a single request, and the MD5 ETag of a multipart upload.
-        if size == 1 << 20 {
-            assert!(head.checksum_sha256().is_some(), "{head:?}");
-        } else {
-            assert!(
+        let checksum = head.checksum_sha256();
+        match (service(), size == 1 << 20) {
+            (_, true) => assert_eq!(
+                checksum,
+                Some(base64::encode(Sha256::digest(&data)).as_str()),
+                "{head:?}"
+            ),
+            // R2 keeps the MD5 ETag of a multipart upload.
+            (Service::R2, false) => assert!(
                 head.e_tag().is_some_and(|tag| tag.ends_with("-3\"")),
                 "{head:?}"
-            );
+            ),
+            // S3 keeps the SHA-256 of each part, and their composite.
+            (Service::Aws, false) => {
+                assert!(checksum.is_some_and(|sum| sum.ends_with("-3")), "{head:?}");
+                let part = client
+                    .head_object()
+                    .bucket(bucket())
+                    .key(&stored.data)
+                    .part_number(1)
+                    .checksum_mode(ChecksumMode::Enabled)
+                    .send()
+                    .await
+                    .unwrap();
+                let length = usize::try_from(part.content_length().unwrap()).unwrap();
+                assert_eq!(
+                    part.checksum_sha256(),
+                    Some(base64::encode(Sha256::digest(&data[..length])).as_str()),
+                    "{part:?}"
+                );
+            }
         }
         assert_eq!(
             head.metadata().and_then(|metadata| metadata.get("sha256")),
@@ -193,11 +240,12 @@ async fn dump_and_record_round_trip() {
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
 async fn dump_that_changed_after_staging_is_never_stored() {
     let client = client().await;
 
-    // R2 checks the single request. Svalbard checks the parts before it completes the upload.
+    // The service checks the single request. Svalbard checks the parts before it completes the
+    // upload.
     for (size, reason) in [
         (1 << 20, "BadDigest"),
         (130 << 20, "changed after the dump"),
@@ -219,12 +267,12 @@ async fn dump_that_changed_after_staging_is_never_stored() {
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
 async fn cancellation_aborts_the_upload() {
     let client = client().await;
     let (dump, run) = staged(130 << 20);
     let destination = destination(&run);
-    // Cancels as soon as R2 lists the multipart upload.
+    // Cancels as soon as the service lists the multipart upload.
     let started = async { while uploads(&client, &destination.prefix).await.is_empty() {} };
     let error = store(&destination, &dump, &run, started)
         .await
@@ -238,8 +286,13 @@ async fn cancellation_aborts_the_upload() {
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
-async fn bucket_outside_the_token_scope_is_access_denied() {
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
+async fn bucket_outside_the_r2_token_scope_is_access_denied() {
+    // An R2 token can be limited to one bucket. The AWS test account has no bucket to deny.
+    if service() != Service::R2 {
+        println!("skipped for aws: no bucket to deny");
+        return;
+    }
     let (dump, run) = staged(1 << 10);
     let mut destination = destination(&run);
     let Target::ObjectStore(bucket) = &mut destination.target else {
@@ -263,14 +316,30 @@ fn cli_prefix(test: &str) -> String {
     format!("svalbard-test/{test}-{nanos}/")
 }
 
-/// The R2 destination for a CLI run under `prefix`.
+/// The destination for a CLI run under `prefix`.
 fn cli_destination(prefix: &str) -> String {
-    cli::r2(&var("SVALBARD_TEST_R2_ENDPOINT"), &bucket(), prefix)
+    match service() {
+        Service::R2 => cli::r2(&var("SVALBARD_TEST_R2_ENDPOINT"), &bucket(), prefix),
+        Service::Aws => format!(
+            "[destination]\ntype = \"s3\"\nbucket = \"{}\"\nprefix = \"{prefix}\"\n",
+            bucket()
+        ),
+    }
 }
 
-/// The secrets that must not appear: the source's, and the R2 secret.
-fn secrets<'a>(source: &[&'a str], r2: &'a str) -> Vec<&'a str> {
-    [source, &[r2]].concat()
+/// The storage secrets that must not appear: the secret key, and the session token of temporary
+/// credentials.
+fn storage_secrets() -> Vec<String> {
+    ["AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+        .into_iter()
+        .filter_map(|name| env::var(name).ok())
+        .collect()
+}
+
+/// The secrets that must not appear: the source's, and the storage secrets.
+fn secrets<'a>(source: &[&'a str], storage: &'a [String]) -> Vec<&'a str> {
+    let storage: Vec<&str> = storage.iter().map(String::as_str).collect();
+    [source, &storage].concat()
 }
 
 /// Checks the stored files against the CLI result, and returns the dump.
@@ -296,32 +365,33 @@ async fn check(client: &Client, prefix: &str, result: &serde_json::Value) -> Vec
 
 fn report(source: &str, result: &serde_json::Value) {
     println!(
-        "matrix: {source} {} ({}) -> r2: restored {} bytes",
+        "matrix: {source} {} ({}) -> {}: restored {} bytes",
         result["server_version"].as_str().unwrap(),
         result["client_version"].as_str().unwrap(),
+        match service() {
+            Service::R2 => "r2",
+            Service::Aws => "aws s3",
+        },
         result["size"]
     );
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
-async fn postgresql_backup_to_r2_restores() {
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
+async fn postgresql_backup_restores() {
     let client = client().await;
     let prefix = cli_prefix("cli-postgresql");
-    let mut fixture = postgresql::Fixture::create("r2_cli").await;
+    let mut fixture = postgresql::Fixture::create("live_cli").await;
     fixture.add_larger().await;
     let setup = Setup::new(
-        "r2-cli-postgresql",
+        "live-cli-postgresql",
         &cli::postgresql_source(&fixture),
         &cli_destination(&prefix),
         "",
     );
-    let r2_secret = var("AWS_SECRET_ACCESS_KEY");
+    let storage = storage_secrets();
     let outcome = setup
-        .run(
-            postgresql::PASSWORD,
-            &secrets(POSTGRESQL_SECRETS, &r2_secret),
-        )
+        .run(postgresql::PASSWORD, &secrets(POSTGRESQL_SECRETS, &storage))
         .await;
 
     assert_eq!(outcome.code, Some(0), "{outcome:?}");
@@ -332,21 +402,21 @@ async fn postgresql_backup_to_r2_restores() {
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
-async fn mysql_backup_to_r2_restores() {
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
+async fn mysql_backup_restores() {
     let client = client().await;
     let prefix = cli_prefix("cli-mysql");
-    let mut fixture = mysql::Fixture::create("r2_cli").await;
+    let mut fixture = mysql::Fixture::create("live_cli").await;
     fixture.add_larger().await;
     let setup = Setup::new(
-        "r2-cli-mysql",
+        "live-cli-mysql",
         &cli::mysql_source(&fixture),
         &cli_destination(&prefix),
         "",
     );
-    let r2_secret = var("AWS_SECRET_ACCESS_KEY");
+    let storage = storage_secrets();
     let outcome = setup
-        .run(mysql::PASSWORD, &secrets(MYSQL_SECRETS, &r2_secret))
+        .run(mysql::PASSWORD, &secrets(MYSQL_SECRETS, &storage))
         .await;
 
     assert_eq!(outcome.code, Some(0), "{outcome:?}");
@@ -357,21 +427,24 @@ async fn mysql_backup_to_r2_restores() {
 }
 
 #[tokio::test]
-#[ignore = "needs R2: run scripts/test-r2.sh"]
-async fn rejected_r2_secret_stores_nothing() {
+#[ignore = "needs a real bucket: run scripts/test-live.sh"]
+async fn rejected_secret_stores_nothing() {
     let client = client().await;
     let prefix = cli_prefix("cli-secret");
-    let fixture = mysql::Fixture::create("r2_cli_secret").await;
+    let fixture = mysql::Fixture::create("live_cli_secret").await;
     let setup = Setup::new(
-        "r2-cli-secret",
+        "live-cli-secret",
         &cli::mysql_source(&fixture),
         &cli_destination(&prefix),
         "",
     );
-    let (r2_secret, wrong) = (var("AWS_SECRET_ACCESS_KEY"), "0".repeat(64));
+    let (storage, wrong) = (storage_secrets(), "0".repeat(64));
     let child = setup.spawn_with(mysql::PASSWORD, &[("AWS_SECRET_ACCESS_KEY", &wrong)]);
     let outcome = setup
-        .finish(child, &[MYSQL_SECRETS, &[&r2_secret, &wrong]].concat())
+        .finish(
+            child,
+            &[&secrets(MYSQL_SECRETS, &storage)[..], &[&wrong]].concat(),
+        )
         .await;
 
     assert_eq!(outcome.code, Some(4), "{outcome:?}");
