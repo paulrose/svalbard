@@ -1,0 +1,62 @@
+# GitHub Actions example: a daily backup of PostgreSQL to an SSH server with SFTP, with the
+# Svalbard CLI. Copy it to .github/workflows/ in the repository that holds svalbard.toml (see
+# examples/sftp.toml) and the server's line for known_hosts.
+#
+# Secrets: DB_PASSWORD, the database password. BACKUP_SSH_KEY, an unencrypted private key for the
+# SSH server. SVALBARD_TOKEN, read access to the Svalbard releases (see "Private access" in the
+# README).
+name: Back up the app database
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One backup of this database at a time. A new run waits, and never cancels a running backup.
+concurrency:
+  group: svalbard-db.example.com-app
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    # More than dump_timeout and upload_timeout together, so that Svalbard's limits act first.
+    timeout-minutes: 150
+    env:
+      SVALBARD_VERSION: 0.1.0
+      # The SHA-256 of the archive, from SHA256SUMS of the release.
+      SVALBARD_SHA256: <sha256 of svalbard-0.1.0-x86_64-unknown-linux-gnu.tar.gz>
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Svalbard
+        env:
+          GH_TOKEN: ${{ secrets.SVALBARD_TOKEN }}
+        run: |
+          archive="svalbard-$SVALBARD_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          gh release download "v$SVALBARD_VERSION" --repo paulrose/svalbard --pattern "$archive" \
+            --dir "$RUNNER_TEMP"
+          echo "$SVALBARD_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/$archive" --directory "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/${archive%.tar.gz}" >>"$GITHUB_PATH"
+      - name: Install pg_dump
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install --yes --no-install-recommends postgresql-client-18
+          echo /usr/lib/postgresql/18/bin >>"$GITHUB_PATH"
+      - name: Write the SSH key
+        env:
+          SSH_KEY: ${{ secrets.BACKUP_SSH_KEY }}
+        run: (umask 077 && printf '%s\n' "$SSH_KEY" >"$RUNNER_TEMP/ssh-key")
+      # GitHub signals only the entry process of a step when it cancels the job. With `exec`,
+      # that process is Svalbard, so it can clean up.
+      - name: Back up
+        env:
+          SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SVALBARD_DESTINATION_IDENTITY_FILE: ${{ runner.temp }}/ssh-key
+          SVALBARD_DESTINATION_KNOWN_HOSTS_FILE: ${{ github.workspace }}/known_hosts
+        run: exec svalbard backup --config svalbard.toml --json
