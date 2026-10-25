@@ -81,10 +81,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The documented CI setup on a runner without Rust: the release archive and the native clients,
-  # installed as the README says, back up PostgreSQL to SFTP and MySQL to S3. The job restores
-  # both with the native tools, and checks a failure, secret redaction and a cancellation by the
-  # runner.
+  # The documented CI setup on a runner without Rust. The job installs the release archive and the
+  # native clients as the README says, backs up PostgreSQL to SFTP and MySQL to S3, restores both
+  # with the native tools, and checks a failure, secret redaction and a cancellation by the runner.
   clean-runner:
     needs: package
     runs-on: ubuntu-24.04
@@ -294,14 +293,14 @@ jobs:
           [ "$OUTCOME" = failure ]
           jq --exit-status '.result == "failed" and .stage == "dump" and .error == "preflight"' \
             "$RUNNER_TEMP/out/wrong.json"
+          # shellcheck disable=SC2016 # The backticks are JMESPath.
           [ "$(aws --endpoint-url http://127.0.0.1:4566 s3api list-objects-v2 --bucket backups \
             --prefix wrong/ --query 'length(Contents || `[]`)' --output text)" = 0 ]
       - name: Check the cancellation
         env:
           OUTCOME: ${{ steps.cancelled.outcome }}
         run: |
-          echo "The step's outcome is $OUTCOME"
-          [ "$OUTCOME" != success ]
+          [ "$OUTCOME" = failure ]
           jq --exit-status '.result == "failed" and .error == "cancelled"' "$RUNNER_TEMP/out/cancelled.json"
           [ "$(docker compose exec -T postgresql psql --username=postgres --tuples-only --no-align \
             --command="SELECT count(*) FROM pg_stat_activity WHERE usename = 'backup'")" = 0 ]
