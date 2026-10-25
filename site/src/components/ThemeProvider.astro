@@ -1,0 +1,33 @@
+---
+// Starlight's ThemeProvider, with "auto" set by the daylight in Longyearbyen instead of the
+// system colour scheme. The daylight code is inlined, like Starlight's, to avoid a flash of the
+// wrong theme.
+import { Icon } from "@astrojs/starlight/components";
+import daylight from "../scripts/daylight.mjs?raw";
+
+const script = `window.StarlightThemeProvider = (() => {
+  ${daylight.replaceAll("export ", "")}
+  const stored = typeof localStorage !== "undefined" && localStorage.getItem("starlight-theme");
+  const fixed = stored === "light" || stored === "dark" ? stored : "";
+  document.documentElement.dataset.theme = fixed || daylightAt().theme;
+  return {
+    updatePickers(theme = fixed || "auto") {
+      document.querySelectorAll("starlight-theme-select").forEach((picker) => {
+        const select = picker.querySelector("select");
+        if (select) select.value = theme;
+        const icon = document.querySelector("#theme-icons")?.content.querySelector("." + theme);
+        const label = picker.querySelector("svg.label-icon");
+        if (icon && label) label.replaceChildren(...icon.cloneNode(true).childNodes);
+      });
+    },
+  };
+})();`;
+---
+
+<script is:inline set:html={script} />
+
+<template id="theme-icons">
+  <Icon name="sun" class="light" />
+  <Icon name="moon" class="dark" />
+  <Icon name="laptop" class="auto" />
+</template>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the native database clients for the Svalbard Action on GitHub's ubuntu-24.04 runner:
 # pg_dump POSTGRESQL (15 to 18) from the PostgreSQL APT repository, and mysqldump MYSQL (8.4 or
-# 9.7) from the MySQL APT repository. The commands are those of "Native clients" in the README.
+# 9.7) from the MySQL APT repository. The commands are those of "Native clients" in docs/install.md.
 set -euo pipefail
 
 case "$POSTGRESQL" in

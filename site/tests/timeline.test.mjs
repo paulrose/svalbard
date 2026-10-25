@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as run from "../timeline.mjs";
+import * as run from "../src/scripts/timeline.mjs";
 
 test("the snapshot closes after the last read and before the upload starts", () => {
   assert.ok(run.CLOSE > run.LAST_READ);

@@ -1,5 +1,5 @@
 //! The backup command: check the destination, dump the source, store the dump and its record,
-//! and remove the run directory. See "Back up" in README.md.
+//! and remove the run directory. See docs/backup.md.
 
 use std::{fmt, future, time::Duration};
 

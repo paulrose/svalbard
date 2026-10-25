@@ -1,4 +1,9 @@
-<!doctype html>
+---
+// The splash page. The documentation pages come from docs/ through Starlight.
+import "../styles/splash.css";
+import Logo from "@brand/logo.svg";
+---
+
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -6,34 +11,27 @@
     <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
-      content="Svalbard is an open-source database backup CLI written in Rust. It is in development."
+      content="Svalbard is an open-source database backup CLI written in Rust. It backs up PostgreSQL and MySQL to S3, R2, SFTP and SCP."
     />
     <title>Svalbard</title>
-    <link rel="icon" href="./assets/mark.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="./styles.css" />
-    <script type="module" src="./app.mjs"></script>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      import "../scripts/app.mjs";
+    </script>
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
     <header>
       <h1>
-        <a class="brand" href="./"
-          ><svg viewBox="0 0 56 36" aria-hidden="true">
-            <path d="M1 33 21 3l12 18 8-12 14 24H1Z" fill="currentColor" />
-            <path
-              d="m15 12 6-9 9 14-9-4-4 5-2-6Zm20 6 6-9 7 12-7-3-3 4-3-4Z"
-              fill="var(--paper)"
-            /></svg
-          >svalbard</a
-        >
+        <a class="brand" href="/"><Logo aria-hidden="true" />svalbard</a>
       </h1>
       <nav aria-label="Main">
-        <a href="#docs">Documentation</a
+        <a href="/docs/">Documentation</a
         ><a href="https://github.com/paulrose/svalbard">GitHub</a>
       </nav>
     </header>
     <main id="main">
-      <section class="scene" aria-label="Illustration of a planned backup run">
+      <section class="scene" aria-label="Illustration of a backup run">
         <canvas aria-hidden="true"></canvas>
         <div class="labels" aria-hidden="true">
           <p class="label trigger" data-anchor="trigger">
@@ -70,8 +68,9 @@
 
       <div class="intro">
         <p>
-          Svalbard is an open-source database backup CLI, written in Rust. It is
-          in development. The scene shows planned behaviour.
+          Svalbard is an open-source database backup CLI, written in Rust. It
+          dumps the database from a snapshot, closes the snapshot, and only then
+          uploads the backup.
         </p>
         <p class="adapters">
           PostgreSQL, MySQL <span aria-hidden="true">→</span
@@ -82,34 +81,26 @@
       <section class="docs" id="docs" aria-labelledby="docs-title">
         <h2 id="docs-title">Documentation</h2>
         <div>
-          <p>
-            These pages are not written yet. The CLI currently prints help and
-            version output. Backup and restore commands are in development.
-          </p>
-          <pre><code>cargo build --locked --release
-./target/release/svalbard --help</code></pre>
+          <pre><code>svalbard config check --config svalbard.toml
+svalbard backup --config svalbard.toml --json</code></pre>
           <ul class="contents">
             <li>
-              <span>Install</span><span>Build from source with Cargo</span>
+              <a href="/docs/install/"><span>Install</span><span>The release archive and the native clients</span></a>
             </li>
             <li>
-              <span>Configuration</span
-              ><span>Files and environment variables, secrets from CI</span>
+              <a href="/docs/configuration/"><span>Configuration</span><span>Files and environment variables, secrets from CI</span></a>
             </li>
             <li>
-              <span>Scheduling</span
-              ><span>Cron, CI jobs and a GitHub Action</span>
+              <a href="/docs/ci/"><span>Run in CI</span><span>CI jobs, schedules and a GitHub Action</span></a>
             </li>
             <li>
-              <span>Databases</span
-              ><span>PostgreSQL and MySQL, snapshots and locks</span>
+              <a href="/docs/database-safety/"><span>Databases</span><span>PostgreSQL and MySQL, snapshots and locks</span></a>
             </li>
             <li>
-              <span>Storage</span
-              ><span>Amazon S3, Cloudflare R2, SFTP and SCP</span>
+              <a href="/docs/storage/"><span>Storage</span><span>Amazon S3, Cloudflare R2, SFTP and SCP</span></a>
             </li>
             <li>
-              <span>Restore</span><span>Follows the first backup release</span>
+              <a href="/docs/restore/"><span>Restore</span><span>Back into a database with the native clients</span></a>
             </li>
           </ul>
         </div>

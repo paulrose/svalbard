@@ -1,4 +1,4 @@
-//! The storage contract. See "Storage" in README.md.
+//! The storage contract. See docs/storage.md.
 //!
 //! Each destination implements [`Destination`]. [`store`] runs the steps that all destinations
 //! share: the names, the completion record, the deadline, cancellation and cleanup.

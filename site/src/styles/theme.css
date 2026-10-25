@@ -1,0 +1,31 @@
+/* The palette and fonts of the splash page (splash.css), as Starlight's variables. */
+:root {
+  --sl-font: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --sl-font-mono: "SFMono-Regular", Menlo, Consolas, monospace;
+  /* Dark */
+  --sl-color-accent-low: #3b2a20;
+  --sl-color-accent: #d69a70;
+  --sl-color-accent-high: #f2cdb0;
+  --sl-color-white: #f2f5ea;
+  --sl-color-gray-1: #e4e9d9;
+  --sl-color-gray-2: #c3d0c8;
+  --sl-color-gray-3: #95aba3;
+  --sl-color-gray-4: #647f78;
+  --sl-color-gray-5: #24383a;
+  --sl-color-gray-6: #16252a;
+  --sl-color-black: #101b1e;
+}
+:root[data-theme="light"] {
+  --sl-color-accent-low: #f1dacd;
+  --sl-color-accent: #a95734;
+  --sl-color-accent-high: #6e3219;
+  --sl-color-white: #17292a;
+  --sl-color-gray-1: #243c38;
+  --sl-color-gray-2: #3a5550;
+  --sl-color-gray-3: #60716a;
+  --sl-color-gray-4: #8b9990;
+  --sl-color-gray-5: #d6d8cd;
+  --sl-color-gray-6: #e7e5dc;
+  --sl-color-gray-7: #ebe9e1;
+  --sl-color-black: #f0eee6;
+}

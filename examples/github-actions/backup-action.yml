@@ -3,8 +3,7 @@
 # examples/sftp.toml) and the server's line for known_hosts.
 #
 # Secrets: DB_PASSWORD, the database password. BACKUP_SSH_KEY, an unencrypted private key for the
-# SSH server. SVALBARD_TOKEN, read access to the Svalbard releases (see "Private access" in the
-# README).
+# SSH server. See docs/github-action.md.
 name: Back up the app database
 
 on:
@@ -41,7 +40,6 @@ jobs:
           version: 0.1.0
           config: svalbard.toml
           postgresql: "18"
-          token: ${{ secrets.SVALBARD_TOKEN }}
         env:
           SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}
           SVALBARD_DESTINATION_IDENTITY_FILE: ${{ runner.temp }}/ssh-key

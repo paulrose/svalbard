@@ -1,0 +1,5 @@
+domain: svalbard.test
+services:
+  web:
+    proxy: http://localhost:7246
+    command: scripts/site.sh dev

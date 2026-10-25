@@ -1,5 +1,5 @@
-//! SSH servers, through the OpenSSH clients: SFTP, or the legacy SCP protocol. See "SSH" in
-//! README.md.
+//! SSH servers, through the OpenSSH clients: SFTP, or the legacy SCP protocol. See
+//! "SSH: SFTP and SCP" in docs/storage.md.
 
 use std::{
     env,

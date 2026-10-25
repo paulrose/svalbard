@@ -1,2 +1,6 @@
 /target/
 /dist/
+/site/node_modules/
+/site/dist/
+/site/.astro/
+/site/brand/
