@@ -86,6 +86,7 @@ impl Setup {
             "PATH",
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
             "AWS_REGION",
             "AWS_EC2_METADATA_DISABLED",
         ] {
