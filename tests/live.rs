@@ -290,6 +290,7 @@ async fn cancellation_aborts_the_upload() {
 async fn bucket_outside_the_r2_token_scope_is_access_denied() {
     // An R2 token can be limited to one bucket. The AWS test account has no bucket to deny.
     if service() != Service::R2 {
+        println!("skipped for aws: no bucket to deny");
         return;
     }
     let (dump, run) = staged(1 << 10);
