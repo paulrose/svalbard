@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   check:
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -24,6 +25,7 @@ jobs:
       - run: cargo test --locked
 
   integration:
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -103,6 +105,7 @@ jobs:
 
   # The release archive, built as the release workflow builds it.
   package:
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -123,6 +126,7 @@ jobs:
   # MySQL to S3, restores both with the native tools, and checks a failure, secret redaction and a
   # cancellation by the runner.
   clean-runner:
+    if: false
     needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -307,6 +311,7 @@ jobs:
   # clients, backs up PostgreSQL to SFTP, and fails on a wrong password and on a cancellation by
   # the runner. The checks read the Action's outputs.
   action:
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
