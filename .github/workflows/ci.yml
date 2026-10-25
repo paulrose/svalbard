@@ -11,7 +11,6 @@ permissions:
 
 jobs:
   check:
-    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -25,7 +24,6 @@ jobs:
       - run: cargo test --locked
 
   integration:
-    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -50,7 +48,7 @@ jobs:
   # Real Cloudflare R2, in the svalbard-ci bucket. GitHub gives no secrets to pull requests
   # from forks, so they skip this job.
   r2:
-    if: false
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
