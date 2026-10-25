@@ -1,4 +1,7 @@
-# Database safety contract
+---
+title: "Database safety contract"
+description: "How Svalbard protects the reads and writes of the source database, and the limits, checks and measurements behind it."
+---
 
 Design note for [#6](https://github.com/paulrose/svalbard/issues/6).
 The rules apply to the PostgreSQL adapter ([#9](https://github.com/paulrose/svalbard/issues/9)) and the MySQL adapter ([#10](https://github.com/paulrose/svalbard/issues/10)).

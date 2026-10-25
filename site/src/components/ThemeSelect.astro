@@ -1,0 +1,50 @@
+---
+// Starlight's ThemeSelect, with "Daylight" instead of "Auto": the daylight in Longyearbyen sets
+// the theme, as on the splash page.
+import Select from "@astrojs/starlight/components/Select.astro";
+---
+
+<starlight-theme-select>
+  <Select
+    icon="laptop"
+    label={Astro.locals.t("themeSelect.accessibleLabel")}
+    options={[
+      { label: Astro.locals.t("themeSelect.dark"), selected: false, value: "dark" },
+      { label: Astro.locals.t("themeSelect.light"), selected: false, value: "light" },
+      { label: "Daylight", selected: true, value: "auto" },
+    ]}
+    width="6.25em"
+  />
+</starlight-theme-select>
+
+<script is:inline>
+  StarlightThemeProvider.updatePickers();
+</script>
+
+<script>
+  import { daylightAt } from "../scripts/daylight.mjs";
+
+  const key = "starlight-theme";
+  const parse = (theme) => (theme === "dark" || theme === "light" ? theme : "auto");
+  const stored = () => parse(localStorage.getItem(key));
+
+  function apply(theme) {
+    StarlightThemeProvider.updatePickers(theme);
+    document.documentElement.dataset.theme = theme === "auto" ? daylightAt().theme : theme;
+    localStorage.setItem(key, theme === "auto" ? "" : theme);
+  }
+
+  // The daylight changes during the day.
+  setInterval(() => stored() === "auto" && apply("auto"), 60000);
+
+  class ThemeSelect extends HTMLElement {
+    constructor() {
+      super();
+      apply(stored());
+      this.querySelector("select")?.addEventListener("change", (event) => {
+        apply(parse(event.currentTarget.value));
+      });
+    }
+  }
+  customElements.define("starlight-theme-select", ThemeSelect);
+</script>

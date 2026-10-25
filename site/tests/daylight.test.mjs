@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { daylightAt } from "../daylight.mjs";
+import { daylightAt } from "../src/scripts/daylight.mjs";
 
 test("Longyearbyen stays light through both noon and midnight in midsummer", () => {
   for (const hour of ["10:00", "22:00"]) {

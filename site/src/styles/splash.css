@@ -106,8 +106,8 @@ header {
   text-decoration: none;
 }
 .brand svg {
-  width: 33px;
-  height: 22px;
+  width: auto;
+  height: 24px;
 }
 nav {
   display: flex;
@@ -249,12 +249,15 @@ pre {
   border-top: 1px solid var(--rule);
 }
 .contents li {
+  border-bottom: 1px solid var(--rule);
+  font-size: 14px;
+}
+.contents a {
   display: grid;
   grid-template-columns: 9em 1fr;
   gap: 4px 24px;
   padding: 11px 0;
-  border-bottom: 1px solid var(--rule);
-  font-size: 14px;
+  text-decoration: none;
 }
 .contents li span:last-child {
   color: var(--muted);
@@ -282,8 +285,7 @@ footer span {
     font-size: 20px;
   }
   .brand svg {
-    width: 28px;
-    height: 19px;
+    height: 20px;
   }
   nav {
     gap: 18px;
@@ -309,7 +311,7 @@ footer span {
     grid-template-columns: 1fr;
     gap: 18px;
   }
-  .contents li {
+  .contents a {
     grid-template-columns: 1fr;
   }
   footer {

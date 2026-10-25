@@ -1,4 +1,4 @@
-//! Amazon S3 and S3-compatible storage, such as Cloudflare R2. See "Storage" in README.md.
+//! Amazon S3 and S3-compatible storage, such as Cloudflare R2. See docs/storage.md.
 
 use std::time::Duration;
 

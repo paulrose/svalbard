@@ -3,8 +3,7 @@
 # examples/sftp.toml) and the server's line for known_hosts.
 #
 # Secrets: DB_PASSWORD, the database password. BACKUP_SSH_KEY, an unencrypted private key for the
-# SSH server. SVALBARD_TOKEN, read access to the Svalbard releases (see "Private access" in the
-# README).
+# SSH server. See docs/ci.md.
 name: Back up the app database
 
 on:
@@ -34,12 +33,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Svalbard
-        env:
-          GH_TOKEN: ${{ secrets.SVALBARD_TOKEN }}
         run: |
           archive="svalbard-$SVALBARD_VERSION-x86_64-unknown-linux-gnu.tar.gz"
-          gh release download "v$SVALBARD_VERSION" --repo paulrose/svalbard --pattern "$archive" \
-            --dir "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/paulrose/svalbard/releases/download/v$SVALBARD_VERSION/$archive"
           echo "$SVALBARD_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check
           tar --extract --gzip --file "$RUNNER_TEMP/$archive" --directory "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/${archive%.tar.gz}" >>"$GITHUB_PATH"

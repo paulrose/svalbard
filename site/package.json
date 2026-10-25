@@ -1,0 +1,11 @@
+{
+  "name": "svalbard-site",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@astrojs/markdown-remark": "7.3.2",
+    "@astrojs/starlight": "0.42.6",
+    "astro": "7.3.8",
+    "starlight-links-validator": "0.27.0"
+  }
+}

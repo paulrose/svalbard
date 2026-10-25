@@ -19,7 +19,16 @@ const daylightNote = document.querySelector("[data-daylight]");
 // Local previews only: ?at=<seconds> freezes the run, ?theme= overrides daylight.
 const params = new URLSearchParams(location.search);
 const frozenAt = params.has("at") ? Number(params.get("at")) : null;
-const forcedTheme = params.get("theme");
+// Otherwise the choice of the theme switch on the documentation pages, if one is stored.
+const forcedTheme = params.get("theme") || storedTheme();
+
+function storedTheme() {
+  try {
+    return localStorage.getItem("starlight-theme");
+  } catch {
+    return null;
+  }
+}
 
 const TAU = Math.PI * 2;
 const FPS = 30;
