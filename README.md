@@ -299,6 +299,9 @@ The runner must reach the database and the destination.
         role-to-assume: arn:aws:iam::123456789012:role/svalbard-backup
         aws-region: eu-west-1
     ```
+
+    The `sub` condition of the role's trust policy must match the subject of the repository's tokens.
+    `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` shows its prefix, which can hold the IDs of the owner and the repository, such as `repo:owner@123/repo@456`.
 - SSH: write the private key from a secret to a file that only the job's user can read, and set `SVALBARD_DESTINATION_IDENTITY_FILE` to it.
   The runner deletes `$RUNNER_TEMP` after the job.
 - known_hosts: commit the server's line next to the configuration. It is public, and a review shows every change.

@@ -9,7 +9,7 @@ use aws_config::{
 use aws_sdk_s3::{
     Client,
     config::{ProvideCredentials, SharedCredentialsProvider, http::HttpResponse},
-    error::{DisplayErrorContext, ProvideErrorMetadata, SdkError},
+    error::{ProvideErrorMetadata, SdkError},
     primitives::{ByteStream, Length},
     types::{ChecksumAlgorithm, CompletedMultipartUpload, CompletedPart},
 };
@@ -254,7 +254,7 @@ impl Destination for S3 {
         credentials.provide_credentials().await.map_err(|error| {
             Error::new(
                 Failure::AccessDenied,
-                format!("cannot load credentials: {}", DisplayErrorContext(&error)),
+                format!("cannot load credentials: {}", describe(&error)),
             )
         })?;
         Ok(())
@@ -386,10 +386,20 @@ where
     } else {
         Failure::Upload
     };
-    Error::new(
-        kind,
-        format!("cannot {action}: {}", DisplayErrorContext(&error)),
-    )
+    Error::new(kind, format!("cannot {action}: {}", describe(&error)))
+}
+
+/// The error and its sources, each as `Display`. `DisplayErrorContext` adds the `Debug` text,
+/// which holds the raw response of a service error. For a signature error, AWS puts the signed
+/// request into the response, with the session token of temporary credentials.
+fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(error) = source {
+        text = format!("{text}: {error}");
+        source = error.source();
+    }
+    text
 }
 
 fn cleanup_failed(key: &str, error: Error) -> Error {
@@ -413,6 +423,26 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_leaves_out_the_raw_response() {
+        let meta = aws_sdk_s3::error::ErrorMetadata::builder()
+            .code("SignatureDoesNotMatch")
+            .message("The request signature we calculated does not match")
+            .build();
+        let body =
+            "<Error><CanonicalRequest>x-amz-security-token:s3cr3t</CanonicalRequest></Error>";
+        let response = HttpResponse::new(403.try_into().unwrap(), body.into());
+        let error = SdkError::service_error(
+            aws_sdk_s3::operation::put_object::PutObjectError::generic(meta),
+            response,
+        );
+        let error = failure("upload app/x.dump", error);
+
+        assert_eq!(error.kind, Failure::AccessDenied);
+        assert!(error.message.contains("SignatureDoesNotMatch"), "{error}");
+        assert!(!error.message.contains("s3cr3t"), "{error}");
+    }
 
     #[test]
     fn part_size_grows_to_fit_the_part_limit() {
