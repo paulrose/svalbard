@@ -6,6 +6,7 @@ use rustls::{
     ClientConfig, RootCertStore,
     pki_types::{CertificateDer, pem::PemObject},
 };
+use tokio::time;
 use tokio_postgres::{NoTls, config::SslMode};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
@@ -21,17 +22,23 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const SESSIONS: &str = "SELECT pid FROM pg_stat_activity
 WHERE application_name = $1 AND usename = current_user";
 
-/// The lock waits of the backup sessions in $1, and the sessions that wait for them.
+/// The lock waits of the backup sessions in $1, and the sessions that wait for them, with the
+/// lock that they want. `pg_blocking_pids()` never reports the startup process of a standby, so
+/// WAL replay that waits for a table lock of the backup is matched by the relation.
 const WAITS: &str = "WITH waiting AS MATERIALIZED (
-  SELECT pid, mode, locktype, relation FROM pg_locks WHERE NOT granted
+  SELECT pid, mode, locktype, database, relation FROM pg_locks WHERE NOT granted
 )
 SELECT pid = ANY($1),
   CASE WHEN pid = ANY($1)
     THEN format('%s on %s', mode, coalesce(relation::regclass::text, locktype))
-    ELSE format('session %s', pid)
+    ELSE format('session %s (%s on %s)', pid, mode, coalesce(relation::regclass::text, locktype))
   END
 FROM waiting
-WHERE pid = ANY($1) OR pg_blocking_pids(pid) && $1";
+WHERE pid = ANY($1) OR pg_blocking_pids(pid) && $1
+  OR mode = 'AccessExclusiveLock' AND locktype = 'relation' AND (database, relation) IN (
+    SELECT database, relation FROM pg_locks
+    WHERE granted AND pid = ANY($1) AND locktype = 'relation'
+  )";
 
 const TERMINATE: &str = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
 WHERE application_name = $1 AND usename = current_user";
@@ -120,26 +127,32 @@ impl Postgres {
                 config.password(password);
             }
             let failed = |error| describe("cannot connect to PostgreSQL", error);
-            let client = match &self.tls {
-                Some(tls) => {
-                    let (client, connection) = config
-                        .ssl_mode(SslMode::Require)
-                        .connect(tls.clone())
-                        .await
-                        .map_err(failed)?;
-                    tokio::spawn(connection);
-                    client
-                }
-                None => {
-                    let (client, connection) = config
-                        .ssl_mode(SslMode::Disable)
-                        .connect(NoTls)
-                        .await
-                        .map_err(failed)?;
-                    tokio::spawn(connection);
-                    client
+            let connect = async {
+                match &self.tls {
+                    Some(tls) => {
+                        let (client, connection) = config
+                            .ssl_mode(SslMode::Require)
+                            .connect(tls.clone())
+                            .await
+                            .map_err(failed)?;
+                        tokio::spawn(connection);
+                        Ok::<_, String>(client)
+                    }
+                    None => {
+                        let (client, connection) = config
+                            .ssl_mode(SslMode::Disable)
+                            .connect(NoTls)
+                            .await
+                            .map_err(failed)?;
+                        tokio::spawn(connection);
+                        Ok(client)
+                    }
                 }
             };
+            // `connect_timeout` covers only the TCP connection, not a server that stops answering.
+            let client = time::timeout(TIMEOUT, connect).await.map_err(|_| {
+                "cannot connect to PostgreSQL: the connection timed out".to_owned()
+            })??;
             self.control = Some(client);
         }
         Ok(self

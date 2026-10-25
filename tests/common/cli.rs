@@ -13,6 +13,8 @@ use tokio::{
     time,
 };
 
+use svalbard::config::{Kind, Source, Tls};
+
 use super::{floci, mysql, postgresql, ssh};
 
 /// The longest a test lets one CLI run take.
@@ -130,29 +132,54 @@ pub async fn within<T>(future: impl Future<Output = T>) -> T {
 }
 
 pub fn postgresql_source(fixture: &postgresql::Fixture) -> String {
-    let source = fixture.source(postgresql::verify_full());
-    format!(
-        "[source]\ntype = \"postgresql\"\nhost = \"{}\"\nport = {}\ndatabase = \"{}\"\n\
-         user = \"{}\"\ntls_ca_file = \"{}\"\n",
-        source.host,
-        source.port,
-        source.database,
-        source.user,
-        env::var("SVALBARD_TEST_POSTGRESQL_CA").unwrap()
-    )
+    source(&fixture.source(postgresql::verify_full()))
 }
 
 pub fn mysql_source(fixture: &mysql::Fixture) -> String {
-    let source = fixture.source(mysql::verify_full());
+    source(&fixture.source(mysql::verify_full()))
+}
+
+/// The `[source]` section for `source`, which must use verify-full with a CA file. The
+/// password comes from the environment.
+pub fn source(source: &Source) -> String {
+    let kind = match source.kind {
+        Kind::Postgresql => "postgresql",
+        Kind::Mysql => "mysql",
+    };
+    let Tls::VerifyFull(Some(ca_file)) = &source.tls else {
+        panic!("the tests use verify-full with the test CA");
+    };
     format!(
-        "[source]\ntype = \"mysql\"\nhost = \"{}\"\nport = {}\ndatabase = \"{}\"\n\
+        "[source]\ntype = \"{kind}\"\nhost = \"{}\"\nport = {}\ndatabase = \"{}\"\n\
          user = \"{}\"\ntls_ca_file = \"{}\"\n",
         source.host,
         source.port,
         source.database,
         source.user,
-        env::var("SVALBARD_TEST_MYSQL_CA").unwrap()
+        ca_file.display()
     )
+}
+
+/// The child processes of `pid`, from /proc.
+pub fn children(pid: u32) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let child: u32 = entry.ok()?.file_name().to_str()?.parse().ok()?;
+            let stat = fs::read_to_string(format!("/proc/{child}/stat")).ok()?;
+            // The command name in parentheses can hold spaces, so read after it.
+            let parent: u32 = stat
+                .rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .nth(1)?
+                .parse()
+                .ok()?;
+            (parent == pid).then_some(child)
+        })
+        .collect()
 }
 
 /// Floci, at `endpoint`.

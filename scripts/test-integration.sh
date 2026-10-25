@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Runs the PostgreSQL, MySQL, S3 and SSH tests in Docker, against database servers with TLS, the
-# Floci S3 emulator and an OpenSSH server. Docker is the only requirement: the runner installs
-# Rust and the native clients inside its container. At the end, the script removes the
-# containers, the volumes and the images that it pulled, so a run leaves nothing behind.
+# Runs the PostgreSQL, MySQL, S3 and SSH tests in Docker, against database servers with TLS, a
+# PostgreSQL standby, a MySQL replica, the Floci S3 emulator and an OpenSSH server. Docker is the
+# only requirement: the runner installs Rust and the native clients inside its container. At the
+# end, the script removes the containers, the volumes and the images that it pulled, so a run
+# leaves nothing behind.
 #
 # Usage: scripts/test-integration.sh [postgresql version] [mysql series] [test filter]
 # Example: scripts/test-integration.sh 15 9.7
@@ -25,4 +26,4 @@ trap cleanup EXIT
 
 "${compose[@]}" run --rm tests \
   cargo test --locked --test postgresql --test mysql --test s3 --test ssh --test backup \
-  --test matrix -- --ignored --show-output "${@:3}"
+  --test matrix --test scenarios -- --ignored --show-output "${@:3}"

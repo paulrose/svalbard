@@ -90,6 +90,14 @@ pub fn admin() -> Config {
         .expect("SVALBARD_TEST_POSTGRESQL must be a connection URL")
 }
 
+/// The admin connection to the hot standby of [`admin`].
+pub fn standby() -> Config {
+    env::var("SVALBARD_TEST_POSTGRESQL_STANDBY")
+        .expect("SVALBARD_TEST_POSTGRESQL_STANDBY must be set: run scripts/test-integration.sh")
+        .parse()
+        .expect("SVALBARD_TEST_POSTGRESQL_STANDBY must be a connection URL")
+}
+
 pub fn verify_full() -> Tls {
     let ca = env::var_os("SVALBARD_TEST_POSTGRESQL_CA")
         .expect("SVALBARD_TEST_POSTGRESQL_CA must be set: run scripts/test-integration.sh");
@@ -103,6 +111,35 @@ pub async fn connect(config: &Config) -> Client {
         .expect("the test connection must open");
     tokio::spawn(connection);
     client
+}
+
+/// Waits until the standby has replayed what the primary wrote so far.
+pub async fn caught_up(primary: &Client, standby: &Client, limit: Duration) {
+    let row = primary
+        .query_one("SELECT pg_current_wal_lsn()::text", &[])
+        .await
+        .unwrap();
+    let lsn: String = row.get(0);
+    let started = std::time::Instant::now();
+    while started.elapsed() < limit {
+        let row = standby
+            .query_one(
+                "SELECT pg_last_wal_replay_lsn() >= $1::text::pg_lsn",
+                &[&lsn],
+            )
+            .await
+            .unwrap();
+        if row.get(0) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the standby did not replay {lsn}");
+}
+
+pub async fn server_version(client: &Client) -> String {
+    let row = client.query_one("SHOW server_version", &[]).await.unwrap();
+    row.get(0)
 }
 
 /// Waits until a backup session waits for the lock on the `stall` table.
@@ -155,6 +192,35 @@ impl Fixture {
         };
         fs::write(fixture.password_file(), format!("{PASSWORD}\n")).unwrap();
         fixture
+    }
+
+    /// A fixture that [`Fixture::create`] made in an earlier process.
+    pub fn open(name: &str) -> Fixture {
+        let database = format!("svalbard_{name}");
+        let mut admin = admin();
+        admin.dbname(&database);
+        Fixture {
+            admin,
+            database,
+            larger: false,
+        }
+    }
+
+    /// The same database and role on another server, such as the standby.
+    pub fn on(&self, server: &Config) -> Fixture {
+        let mut admin = server.clone();
+        admin.dbname(&self.database);
+        Fixture {
+            admin,
+            database: self.database.clone(),
+            larger: self.larger,
+        }
+    }
+
+    /// The host and port of the server, for a proxy.
+    pub fn upstream(&self) -> String {
+        let source = self.source(Tls::Disable);
+        format!("{}:{}", source.host, source.port)
     }
 
     /// Adds the `larger` table.

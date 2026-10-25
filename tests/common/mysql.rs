@@ -122,6 +122,22 @@ pub fn admin() -> Opts {
     Opts::from_url(&url).expect("SVALBARD_TEST_MYSQL must be a connection URL")
 }
 
+/// The admin connection to the replica of [`admin`].
+pub fn replica() -> Opts {
+    opts("SVALBARD_TEST_MYSQL_REPLICA")
+}
+
+/// The admin connection to the server without performance_schema.
+pub fn nops() -> Opts {
+    opts("SVALBARD_TEST_MYSQL_NOPS")
+}
+
+fn opts(variable: &str) -> Opts {
+    let url = env::var(variable)
+        .unwrap_or_else(|_| panic!("{variable} must be set: run scripts/test-integration.sh"));
+    Opts::from_url(&url).unwrap_or_else(|_| panic!("{variable} must be a connection URL"))
+}
+
 pub fn verify_full() -> Tls {
     let ca = env::var_os("SVALBARD_TEST_MYSQL_CA")
         .expect("SVALBARD_TEST_MYSQL_CA must be set: run scripts/test-integration.sh");
@@ -132,6 +148,31 @@ pub async fn connect(options: OptsBuilder) -> Conn {
     Conn::new(options.prefer_socket(false))
         .await
         .expect("the test connection must open")
+}
+
+/// Waits until the replica has applied what the source executed so far.
+pub async fn caught_up(source: &mut Conn, replica: &mut Conn, limit: Duration) {
+    let executed: String = source
+        .query_first("SELECT @@GLOBAL.gtid_executed")
+        .await
+        .unwrap()
+        .unwrap();
+    let timed_out: Option<u8> = replica
+        .exec_first(
+            "SELECT WAIT_FOR_EXECUTED_GTID_SET(?, ?)",
+            (&executed, limit.as_secs()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(timed_out, Some(0), "the replica did not apply {executed}");
+}
+
+pub async fn server_version(client: &mut Conn) -> String {
+    client
+        .query_first("SELECT VERSION()")
+        .await
+        .unwrap()
+        .unwrap()
 }
 
 /// A string literal for MySQL statements that take no parameters.
@@ -148,6 +189,8 @@ pub fn literal(value: &str) -> String {
 /// A database with fixture data, and a backup account with the same name and the grants from
 /// docs/database-safety.md.
 pub struct Fixture {
+    /// The admin connection to the server.
+    pub admin: Opts,
     pub database: String,
     /// Whether [`Fixture::add_larger`] ran.
     pub larger: bool,
@@ -155,8 +198,13 @@ pub struct Fixture {
 
 impl Fixture {
     pub async fn create(name: &str) -> Fixture {
+        Fixture::create_at(admin(), name).await
+    }
+
+    /// Like [`Fixture::create`], on the server of `admin`.
+    pub async fn create_at(admin: Opts, name: &str) -> Fixture {
         let database = format!("svalbard_{name}");
-        let mut server = connect(OptsBuilder::from_opts(admin())).await;
+        let mut server = connect(OptsBuilder::from_opts(admin.clone())).await;
         // The first statements remove what an earlier failed run left.
         server
             .query_drop(format!(
@@ -175,6 +223,7 @@ impl Fixture {
             .await
             .unwrap();
         let fixture = Fixture {
+            admin,
             database,
             larger: false,
         };
@@ -186,6 +235,29 @@ impl Fixture {
         }
         fs::write(fixture.password_file(), format!("{PASSWORD}\n")).unwrap();
         fixture
+    }
+
+    /// A fixture that [`Fixture::create`] made in an earlier process.
+    pub fn open(name: &str) -> Fixture {
+        Fixture {
+            admin: admin(),
+            database: format!("svalbard_{name}"),
+            larger: false,
+        }
+    }
+
+    /// The same database and account on another server, such as the replica.
+    pub fn on(&self, admin: Opts) -> Fixture {
+        Fixture {
+            admin,
+            database: self.database.clone(),
+            larger: self.larger,
+        }
+    }
+
+    /// The host and port of the server, for a proxy.
+    pub fn upstream(&self) -> String {
+        format!("{}:{}", self.admin.ip_or_hostname(), self.admin.tcp_port())
     }
 
     /// Adds the `larger` table.
@@ -219,11 +291,10 @@ impl Fixture {
     }
 
     pub fn source(&self, tls: Tls) -> Source {
-        let admin = admin();
         Source {
             kind: Kind::Mysql,
-            host: admin.ip_or_hostname().to_owned(),
-            port: admin.tcp_port(),
+            host: self.admin.ip_or_hostname().to_owned(),
+            port: self.admin.tcp_port(),
             database: self.database.clone(),
             user: self.database.clone(),
             password: Password::File(self.password_file()),
@@ -233,12 +304,12 @@ impl Fixture {
 
     /// An admin connection to the database.
     pub async fn client(&self) -> Conn {
-        connect(OptsBuilder::from_opts(admin()).db_name(Some(&self.database))).await
+        connect(OptsBuilder::from_opts(self.admin.clone()).db_name(Some(&self.database))).await
     }
 
     /// A connection of the backup account, without TLS.
     pub async fn account(&self) -> Conn {
-        let options = OptsBuilder::from_opts(admin())
+        let options = OptsBuilder::from_opts(self.admin.clone())
             .db_name(Some(&self.database))
             .user(Some(&self.database))
             .pass(Some(PASSWORD));
@@ -290,14 +361,14 @@ impl Fixture {
     /// Restores `dump` into a new database with the `mysql` client, and connects to it.
     pub async fn restore(&self, dump: &Path) -> Conn {
         let restored = format!("{}_restored", self.database);
-        let mut server = connect(OptsBuilder::from_opts(admin())).await;
+        let admin = self.admin.clone();
+        let mut server = connect(OptsBuilder::from_opts(admin.clone())).await;
         server
             .query_drop(format!(
                 "DROP DATABASE IF EXISTS {restored}; CREATE DATABASE {restored}"
             ))
             .await
             .unwrap();
-        let admin = admin();
         let defaults = Path::new(env!("CARGO_TARGET_TMPDIR")).join("mysql-admin.cnf");
         fs::write(
             &defaults,

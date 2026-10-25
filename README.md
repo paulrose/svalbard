@@ -191,6 +191,7 @@ Progress lines go to stderr.
 SIGINT and SIGTERM cancel the backup. Svalbard ends the backup sessions, stops the clients, removes unfinished uploads and temporary files, and deletes the run directory.
 This cleanup can take up to about a minute. If a CI system sends SIGKILL sooner, no cleanup runs.
 Then `PR_SET_PDEATHSIG` stops the clients, the server-side backstops end the database sessions, and the lifecycle rule (S3) or the `.partial` names (SSH) mark what remains.
+The run directory `svalbard-<run id>` also remains in `safety.staging_dir`, with the partial dump and, if the dump was running, the file with the database password. Delete it.
 GitHub Actions sends SIGINT, then SIGTERM, and then SIGKILL about 10 s after it cancels a job.
 
 ## Output and exit codes
@@ -230,7 +231,7 @@ The [CI workflow](.github/workflows/ci.yml) runs the same checks on Ubuntu for e
 It uses the toolchain in `rust-toolchain.toml`. The `check` and `integration` jobs need no credentials or paid services.
 
 The PostgreSQL, MySQL, S3 and SSH tests run in Docker, which is their only requirement.
-[`scripts/test-integration.sh`](scripts/test-integration.sh) starts both database servers with TLS, the [Floci](https://github.com/floci-io/floci) S3 emulator and an OpenSSH server on a private network, and a runner container that installs Rust and the native clients.
+[`scripts/test-integration.sh`](scripts/test-integration.sh) starts both database servers with TLS, a PostgreSQL hot standby, a MySQL replica, a MySQL server without `performance_schema`, the [Floci](https://github.com/floci-io/floci) S3 emulator and an OpenSSH server on a private network, and a runner container that installs Rust and the native clients.
 The arguments are the PostgreSQL version and the MySQL series. The defaults are 18 and 8.4.
 The script writes nothing to the host. At the end, it removes the containers, the volumes and the images that it pulled.
 
@@ -246,6 +247,21 @@ Each test downloads the backup without Svalbard, restores it with `pg_restore` o
 `tests/backup.rs` runs the CLI into failures: a wrong password, denied writes, a missing record, signals, a full staging filesystem, rejected credentials, and broken transfers.
 Every failure must exit with an error, leave no completion record and no staged files, and keep secrets out of the output.
 The matrix tests print one `matrix:` line each, with the client and server versions, in the `successes` output of the test run.
+
+`tests/scenarios.rs` runs the [safety scenarios](docs/database-safety.md#scenarios) that need real servers: contention on the primary, the standby and the replica, `dump_timeout`, signals during preflight and the dump, `SIGKILL`, detection without `performance_schema`, two runs on one database, and a lost control connection.
+Each test prints a `scenario:` line with the results and the timings against budgets B5 and B6.
+
+[`scripts/measure.sh`](scripts/measure.sh) measures the workload budgets of the contract for one PostgreSQL version and one MySQL series.
+It loads the primary with pgbench or sysbench at half of the throughput that the servers sustain, runs backups back to back on the primary and on the standby or replica, and restores the last dump of each.
+It prints Markdown tables: latency, throughput, errors, server CPU and I/O, the memory of Svalbard and the duration of the detection query.
+On a host with 8 or more CPUs, the servers, the load and the backup get their own CPUs.
+A pair takes about an hour and needs about 15 GB of Docker disk. Like the tests, the script leaves nothing behind.
+
+```sh
+scripts/measure.sh 18 8.4
+```
+
+The [Measure workflow](.github/workflows/measure.yml) runs the script for each version pair on demand. Its runners have 2 CPUs, which the servers, the load and the backup share.
 
 The R2 tests need a real R2 bucket. [`scripts/test-r2.sh`](scripts/test-r2.sh) runs them in Docker.
 Set `SVALBARD_TEST_R2_ENDPOINT` and `SVALBARD_TEST_R2_BUCKET`, and the keys of an R2 API token with Object Read & Write on the bucket in `SVALBARD_TEST_R2_ACCESS_KEY_ID` and `SVALBARD_TEST_R2_SECRET_ACCESS_KEY`.

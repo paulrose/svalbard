@@ -234,6 +234,8 @@ async fn full_staging_filesystem_fails_without_leftovers() {
             .contains("is full"),
         "{outcome:?}"
     );
+    let mut admin = fixture.client().await;
+    assert!(fixture.backup_sessions(&mut admin).await.is_empty());
 
     // Not enough free space for the limit: the dump never starts.
     let limited = Setup::new(

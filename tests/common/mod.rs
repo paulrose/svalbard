@@ -91,13 +91,17 @@ pub enum Fault {
     CloseEachAfter(u64),
     /// Never returns the answer to the first request.
     HoldFirstResponse,
+    /// Stops the answers of the connection with this number, counted from 1, after this many
+    /// bytes. In front of a database, the server then waits to send while the dump keeps its
+    /// snapshot and locks.
+    PauseResponses { connection: usize, after: u64 },
 }
 
 /// A TCP proxy. Connections that open after the fault pass unchanged, so cleanup requests
 /// reach the server.
 pub struct Proxy {
     pub address: SocketAddr,
-    /// Notified when the proxy stalls a connection.
+    /// Notified when the proxy stalls or holds a connection.
     pub stalled: Arc<Notify>,
 }
 
@@ -118,18 +122,41 @@ pub async fn proxy(upstream: &str, fault: Fault) -> Proxy {
                 continue;
             }
             let server = TcpStream::connect(&upstream).await.unwrap();
-            let first = connections.fetch_add(1, Ordering::SeqCst) == 0;
+            let number = connections.fetch_add(1, Ordering::SeqCst) + 1;
             let active = !faulted.load(Ordering::SeqCst);
             let (sent, faulted, notify) = (sent.clone(), faulted.clone(), notify.clone());
             tokio::spawn(async move {
                 let (mut client_read, mut client_write) = client.into_split();
                 let (mut server_read, mut server_write) = server.into_split();
-                let hold = first && matches!(fault, Fault::HoldFirstResponse);
-                let answers = tokio::spawn(async move {
-                    if hold {
-                        future::pending::<()>().await;
+                let pause = match fault {
+                    Fault::HoldFirstResponse if number == 1 => Some(0),
+                    Fault::PauseResponses { connection, after } if number == connection => {
+                        Some(after)
                     }
-                    let _ = tokio::io::copy(&mut server_read, &mut client_write).await;
+                    _ => None,
+                };
+                let held = notify.clone();
+                let answers = tokio::spawn(async move {
+                    let Some(limit) = pause else {
+                        let _ = tokio::io::copy(&mut server_read, &mut client_write).await;
+                        return;
+                    };
+                    let mut buffer = vec![0; 64 << 10];
+                    let mut answered = 0;
+                    loop {
+                        let wanted = (limit - answered).min(buffer.len() as u64) as usize;
+                        if wanted == 0 {
+                            held.notify_one();
+                            future::pending::<()>().await;
+                        }
+                        let Ok(read @ 1..) = server_read.read(&mut buffer[..wanted]).await else {
+                            return;
+                        };
+                        answered += read as u64;
+                        if client_write.write_all(&buffer[..read]).await.is_err() {
+                            return;
+                        }
+                    }
                 });
                 let mut buffer = vec![0; 64 << 10];
                 let mut own = 0;
