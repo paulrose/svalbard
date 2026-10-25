@@ -75,7 +75,7 @@ Give the bucket a lifecycle rule that deletes objects under `svalbard-test/` aft
 
 CI runs the live tests for pull requests from this repository, for pushes to `main`, and on demand:
 
-- `r2` in the `svalbard-ci` bucket, with the keys in the repository secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, and the endpoint and bucket in the variables `R2_ENDPOINT` and `R2_BUCKET`.
+- `r2` in the `svalbard-ci` bucket, with the keys and the endpoint in the repository secrets `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_ENDPOINT`, and the bucket in the variable `R2_BUCKET`. The endpoint holds the account ID, so it is a secret, which the logs mask.
 - `aws-keys` in the `svalbard-testing` bucket, with the access keys in the repository secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 - `aws-oidc` in the same bucket, with temporary credentials of the role in the repository variable `AWS_ROLE_ARN`, which the job assumes through OIDC.
 
