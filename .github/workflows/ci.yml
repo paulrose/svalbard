@@ -81,9 +81,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The documented CI setup on a fresh runner that builds nothing. The job installs the release archive and the
-  # native clients as the README says, backs up PostgreSQL to SFTP and MySQL to S3, restores both
-  # with the native tools, and checks a failure, secret redaction and a cancellation by the runner.
+  # The documented CI setup on a fresh runner that builds nothing. The job installs the release
+  # archive, and the native clients with action/clients.sh. It backs up PostgreSQL to SFTP and
+  # MySQL to S3, restores both with the native tools, and checks a failure, secret redaction and a
+  # cancellation by the runner.
   clean-runner:
     needs: package
     runs-on: ubuntu-24.04
@@ -121,28 +122,11 @@ jobs:
           tar --extract --gzip --file svalbard-*.tar.gz
           name=$(basename svalbard-*.tar.gz .tar.gz)
           echo "$PWD/$name" >>"$GITHUB_PATH"
-      - name: Install pg_dump
-        run: |
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install --yes --no-install-recommends "postgresql-client-$POSTGRESQL_VERSION"
-          echo "/usr/lib/postgresql/$POSTGRESQL_VERSION/bin" >>"$GITHUB_PATH"
-      - name: Install mysqldump
-        run: |
-          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/mysql.asc" \
-            https://repo.mysql.com/RPM-GPG-KEY-mysql-2025
-          fingerprint=$(gpg --show-keys --with-colons "$RUNNER_TEMP/mysql.asc" |
-            awk -F: '$1 == "pub" { getline; print $10 }')
-          if [ "$fingerprint" != BCA43417C3B485DD128EC6D4B7B3B788A8D3785C ]; then
-            echo "::error::The MySQL signing key has the fingerprint $fingerprint"
-            exit 1
-          fi
-          gpg --dearmor <"$RUNNER_TEMP/mysql.asc" | sudo tee /etc/apt/keyrings/mysql.gpg >/dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/mysql.gpg] https://repo.mysql.com/apt/ubuntu noble mysql-$MYSQL_SERIES-lts" |
-            sudo tee /etc/apt/sources.list.d/mysql.list
-          # Otherwise apt replaces the runner's MySQL 8.0 server with Oracle's server.
-          sudo apt-get remove --yes mysql-server mysql-server-8.0 mysql-server-core-8.0
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends mysql-community-client
+      - name: Install the database clients
+        env:
+          POSTGRESQL: ${{ matrix.postgresql }}
+          MYSQL: ${{ matrix.mysql }}
+        run: action/clients.sh
       - run: svalbard --version && pg_dump --version && mysqldump --version
       - name: Prepare the servers
         run: tests/clean-runner/prepare.sh
