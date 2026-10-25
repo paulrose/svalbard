@@ -79,7 +79,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The documented CI setup on a runner without Rust. The job installs the release archive and the
+  # The documented CI setup on a fresh runner that builds nothing. The job installs the release archive and the
   # native clients as the README says, backs up PostgreSQL to SFTP and MySQL to S3, restores both
   # with the native tools, and checks a failure, secret redaction and a cancellation by the runner.
   clean-runner:
@@ -213,6 +213,7 @@ jobs:
           exec svalbard backup --config tests/clean-runner/mysql-s3.toml --json
           >"$RUNNER_TEMP/out/wrong.json" 2>"$RUNNER_TEMP/out/wrong.err"
       - name: Hold a lock on the PostgreSQL table
+        timeout-minutes: 2
         run: |
           docker compose exec --detach postgresql psql --username=postgres --dbname=app \
             --command='BEGIN; LOCK TABLE items IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(600)'

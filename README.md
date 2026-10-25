@@ -446,7 +446,7 @@ The `r2` CI job runs these tests in the `svalbard-ci` bucket for pull requests f
 It reads the keys from the repository secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, and the endpoint and bucket from the variables `R2_ENDPOINT` and `R2_BUCKET`.
 
 The `package` CI job builds the release archive with [`scripts/package.sh`](scripts/package.sh).
-The `clean-runner` job installs it on a runner without Rust, with the native clients as in [Install](#install), and runs the steps of the [CI example](#run-in-ci).
+The `clean-runner` job installs it on a fresh runner that builds nothing, with the native clients as in [Install](#install), and runs the steps of the [CI example](#run-in-ci).
 Its servers are those of the Docker tests, which [`tests/docker/ports.yaml`](tests/docker/ports.yaml) publishes on 127.0.0.1.
 It backs up PostgreSQL to SFTP and MySQL to S3, restores both as in [Restore](#restore), and checks a wrong password, a cancellation by a step timeout, and that no output contains a password.
 
