@@ -1,0 +1,107 @@
+name: Svalbard backup
+description: Installs a released Svalbard and, optionally, the native database clients, and runs one backup.
+
+inputs:
+  version:
+    description: The Svalbard version, such as 0.1.0. The Action checks the archive against action/checksums.txt.
+    required: true
+  config:
+    description: The configuration file. Secrets go in the step's env, such as SVALBARD_SOURCE_PASSWORD.
+    required: true
+  postgresql:
+    description: Install pg_dump of this major version, 15 to 18. Only on GitHub's ubuntu-24.04 runner.
+    required: false
+    default: ""
+  mysql:
+    description: Install mysqldump of this series, 8.4 or 9.7. Only on GitHub's ubuntu-24.04 runner.
+    required: false
+    default: ""
+  token:
+    description: A token that can read the releases of paulrose/svalbard.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  result:
+    description: "`complete` or `failed`."
+    value: ${{ steps.result.outputs.result }}
+  run-id:
+    description: The ID of the run.
+    value: ${{ steps.result.outputs.run-id }}
+  data:
+    description: The key or path of the dump.
+    value: ${{ steps.result.outputs.data }}
+  record:
+    description: The key or path of the completion record.
+    value: ${{ steps.result.outputs.record }}
+  size:
+    description: The size of the dump in bytes.
+    value: ${{ steps.result.outputs.size }}
+  sha256:
+    description: The SHA-256 of the dump.
+    value: ${{ steps.result.outputs.sha256 }}
+  stage:
+    description: The stage of a failure.
+    value: ${{ steps.result.outputs.stage }}
+  error:
+    description: The kind of a failure, such as `lock_timeout` or `cancelled`.
+    value: ${{ steps.result.outputs.error }}
+  json:
+    description: The JSON result of `svalbard backup --json`. It is also in $RUNNER_TEMP/svalbard-result.json, which keeps it after a step timeout.
+    value: ${{ steps.result.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Svalbard
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        # A result from an earlier backup in this job must not become this backup's result.
+        rm -f "$RUNNER_TEMP/svalbard-result.json"
+        if [ "$RUNNER_OS" != Linux ] || [ "$RUNNER_ARCH" != X64 ]; then
+          echo "::error::Svalbard runs on Linux x86_64, not on $RUNNER_OS $RUNNER_ARCH."
+          exit 1
+        fi
+        archive="svalbard-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+        sum=$(awk -v archive="$archive" '$2 == archive' "$GITHUB_ACTION_PATH/checksums.txt")
+        if [ -z "$sum" ]; then
+          echo "::error::This version of the Action does not know Svalbard $VERSION. Use a newer version of the Action."
+          exit 1
+        fi
+        dir="$RUNNER_TEMP/svalbard-action"
+        mkdir -p "$dir"
+        gh release download "v$VERSION" --repo paulrose/svalbard --pattern "$archive" --dir "$dir" --clobber
+        (cd "$dir" && sha256sum --check --strict <<<"$sum")
+        tar --extract --gzip --file "$dir/$archive" --directory "$dir"
+        echo "$dir/${archive%.tar.gz}" >>"$GITHUB_PATH"
+    - name: Install the database clients
+      if: inputs.postgresql != '' || inputs.mysql != ''
+      shell: bash
+      env:
+        POSTGRESQL: ${{ inputs.postgresql }}
+        MYSQL: ${{ inputs.mysql }}
+      run: '"$GITHUB_ACTION_PATH/clients.sh"'
+    # GitHub signals only the entry process of a step when it cancels it. With `exec`, that
+    # process is Svalbard, so it can clean up.
+    - name: Back up
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: exec svalbard backup --config "$CONFIG" --json >"$RUNNER_TEMP/svalbard-result.json"
+    - name: Read the result
+      id: result
+      if: always()
+      shell: bash
+      run: |
+        file="$RUNNER_TEMP/svalbard-result.json"
+        if [ ! -s "$file" ]; then exit 0; fi
+        cat "$file"
+        {
+          echo "json=$(cat "$file")"
+          jq --raw-output '"result=\(.result)", "run-id=\(.run_id // "")", "data=\(.data // "")",
+            "record=\(.record // "")", "size=\(.size // "")", "sha256=\(.sha256 // "")",
+            "stage=\(.stage // "")", "error=\(.error // "")"' "$file"
+        } >>"$GITHUB_OUTPUT"
