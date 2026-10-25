@@ -4,7 +4,7 @@
 // icon. Without the token, the site uses the original mark in src/assets/.
 import { mkdir, writeFile } from "node:fs/promises";
 
-const token = process.env.FONTAWESOME_API_TOKEN;
+const token = process.env.FONTAWESOME_API_TOKEN?.trim();
 if (!token) {
   console.log("brand: FONTAWESOME_API_TOKEN is not set, so the site uses src/assets/");
   process.exit(0);
@@ -15,7 +15,11 @@ const auth = await fetch(`${api}/token`, {
   method: "POST",
   headers: { Authorization: `Bearer ${token}` },
 });
-if (!auth.ok) throw new Error(`Font Awesome rejected the API token: HTTP ${auth.status}`);
+if (!auth.ok) {
+  throw new Error(
+    `Font Awesome rejected FONTAWESOME_API_TOKEN: HTTP ${auth.status}. It must be an API token, with the Pro SVG scope.`,
+  );
+}
 const { access_token: access } = await auth.json();
 
 const query = `{ release(version: "7.3.1") { icon(name: "mountains") {
