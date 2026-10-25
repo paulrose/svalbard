@@ -1,0 +1,3 @@
+# The SHA-256 of each release archive, from SHA256SUMS of the release. The Action installs only
+# the versions in this file. A new release adds its line in a pull request.
+e17ef6c847db6cd35eb7d12ec7d385ef8fb503b4a2cf4993fe839b14343516a6  svalbard-0.1.0-x86_64-unknown-linux-gnu.tar.gz

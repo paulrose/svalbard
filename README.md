@@ -281,6 +281,7 @@ Errors always go to stderr. No output contains a secret.
 A CI job installs the archive and the native clients, gives the secrets in environment variables, and runs `svalbard backup --json`.
 The exit code fails the job when the backup fails.
 [`examples/github-actions/backup-cli.yml`](examples/github-actions/backup-cli.yml) is a complete GitHub Actions workflow for PostgreSQL to SFTP.
+The [GitHub Action](#github-action) does the installation and the backup in one step.
 The runner must reach the database and the destination.
 
 ### Secrets
@@ -342,14 +343,54 @@ To use the result in later steps, write stdout to a file:
 A failed backup exits with 4 or 5 (see [Output and exit codes](#output-and-exit-codes)), so the step and the job fail.
 After 4, the next run can start normally. After 5, read the message: a backup session, the run directory or an unfinished upload may remain.
 
+### GitHub Action
+
+The Action in [`action/`](action/action.yml) installs a released Svalbard and checks the archive against its SHA-256 in [`action/checksums.txt`](action/checksums.txt).
+It can install the database clients, and then it runs one backup with `exec`.
+[`examples/github-actions/backup-action.yml`](examples/github-actions/backup-action.yml) is a complete workflow.
+
+```yaml
+- uses: paulrose/svalbard/action@<commit> # v0.1.0
+  with:
+    version: 0.1.0
+    config: svalbard.toml
+    postgresql: "18"
+    token: ${{ secrets.SVALBARD_TOKEN }}
+  env:
+    SVALBARD_SOURCE_PASSWORD: ${{ secrets.DB_PASSWORD }}
+```
+
+Pin the Action to a commit. Each commit of the Action installs only the Svalbard versions in its `checksums.txt`.
+
+| Input | Meaning |
+| --- | --- |
+| `version` | Required. The Svalbard version, such as `0.1.0`. |
+| `config` | Required. The configuration file. |
+| `postgresql` | Installs `pg_dump` of this major version: `15` to `18`. |
+| `mysql` | Installs `mysqldump` of this series: `8.4` or `9.7`. |
+| `token` | A token that can read the Svalbard releases. The default is `github.token`. See [Private access](#private-access). |
+
+`postgresql` and `mysql` change the system packages as in [Native clients](#native-clients), so they work only on GitHub's `ubuntu-24.04` runner.
+On another runner, install the clients before the Action.
+The other settings and the secrets go in the `env` of the step, as for the CLI. The Action has no inputs for secrets.
+
+The outputs come from the JSON result: `result`, `run-id`, `data`, `record`, `size`, `sha256`, `stage` and `error`, and `json` with the complete result.
+A failed backup fails the step with the exit code of Svalbard, and the outputs describe the failure.
+
 ### Private access
 
 The repository is private, so the release download needs a token with read access to it.
 Create a fine-grained personal access token for the resource owner `paulrose`, with access to the repository `paulrose/svalbard` only and the permission Contents: Read-only.
-Store it as a secret such as `SVALBARD_TOKEN`, and give it only to the download step, as `GH_TOKEN`.
+Store it as a secret such as `SVALBARD_TOKEN`. Give it only to the download step as `GH_TOKEN`, or to the Action as `token`.
 
 Keep this token apart from the database and storage credentials. It reads the Svalbard source and releases, not the backups.
 A workflow in `paulrose/svalbard` itself can use `github.token` instead.
+
+Other private repositories of `paulrose` can use the Action when Settings → Actions → General → Access of `paulrose/svalbard` is "Accessible from repositories owned by 'paulrose' user".
+This setting shares the Action, not the releases, so these workflows need the token too.
+
+When the repository is public, the release download needs no personal token, and workflows reference the Action as `paulrose/svalbard/action@<commit>`.
+If the Action moves to its own repository for the GitHub Marketplace, the reference names that repository instead.
 
 ## Restore
 
@@ -449,6 +490,7 @@ The `package` CI job builds the release archive with [`scripts/package.sh`](scri
 The `clean-runner` job installs it on a fresh runner that builds nothing, with the native clients as in [Install](#install), and runs the steps of the [CI example](#run-in-ci).
 Its servers are those of the Docker tests, which [`tests/docker/ports.yaml`](tests/docker/ports.yaml) publishes on 127.0.0.1.
 It backs up PostgreSQL to SFTP and MySQL to S3, restores both as in [Restore](#restore), and checks a wrong password, a cancellation by a step timeout, and that no output contains a password.
+The `action` job runs the Action of the commit with a released Svalbard on the same servers. It checks a backup, a wrong password and a cancellation through the outputs of the Action.
 
 Database adapters must obey the [database safety contract](docs/database-safety.md).
 
@@ -467,6 +509,7 @@ GitHub deletes merged head branches automatically.
    ```
 
 3. The [Release workflow](.github/workflows/release.yml) builds the archive, checks that the tag matches the version, and creates the GitHub release with the archive and `SHA256SUMS`.
+4. In a pull request, add the line of the archive from `SHA256SUMS` to [`action/checksums.txt`](action/checksums.txt), and change the version in the `action` CI job and the examples.
 
 ## Website preview
 

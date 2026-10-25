@@ -143,43 +143,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends mysql-community-client
       - run: svalbard --version && pg_dump --version && mysqldump --version
       - name: Prepare the servers
-        run: |
-          # Without --no-deps, Compose runs `certs` again, which replaces the CA.
-          docker compose up --wait --no-deps --no-recreate postgresql mysql floci ssh
-          docker compose cp postgresql:/certs/ca.crt "$RUNNER_TEMP/ca.crt"
-          docker compose cp ssh:/keys/client "$RUNNER_TEMP/ssh-key"
-          docker compose cp ssh:/keys/known_hosts "$RUNNER_TEMP/known_hosts"
-          docker compose exec -T ssh install -d -o backup /srv/backups/app /srv/backups/cancelled
-          aws --endpoint-url http://127.0.0.1:4566 s3 mb s3://backups
-          mkdir "$RUNNER_TEMP/staging" "$RUNNER_TEMP/out" "$RUNNER_TEMP/restore"
-
-          password=$(openssl rand -hex 16)
-          wrong=$(openssl rand -hex 16)
-          echo "::add-mask::$password"
-          echo "::add-mask::$wrong"
-          printf 'BACKUP_PASSWORD=%s\nWRONG_PASSWORD=%s\n' "$password" "$wrong" >>"$GITHUB_ENV"
-          # The passwords go through stdin, never through arguments.
-          docker compose exec -T postgresql psql --quiet --username=postgres --set=ON_ERROR_STOP=1 <<SQL
-          CREATE ROLE backup LOGIN PASSWORD '$password' IN ROLE pg_read_all_data;
-          CREATE DATABASE app;
-          \c app
-          CREATE TABLE items (id int PRIMARY KEY, name text NOT NULL);
-          INSERT INTO items SELECT i, md5(i::text) FROM generate_series(1, 1000) AS i;
-          SQL
-          docker compose exec -T --env MYSQL_PWD=mysql mysql mysql --user=root <<SQL
-          CREATE DATABASE app;
-          USE app;
-          CREATE TABLE items (id INT PRIMARY KEY, name VARCHAR(32) NOT NULL);
-          INSERT INTO items WITH RECURSIVE n (i) AS (
-            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000
-          ) SELECT i, CONCAT('item ', i) FROM n;
-          CREATE USER backup IDENTIFIED BY '$password';
-          GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON app.* TO backup;
-          GRANT SHOW_ROUTINE ON *.* TO backup;
-          GRANT SELECT ON performance_schema.metadata_locks TO backup;
-          GRANT SELECT ON performance_schema.threads TO backup;
-          GRANT SELECT ON performance_schema.user_variables_by_thread TO backup;
-          SQL
+        run: tests/clean-runner/prepare.sh
 
       # GitHub signals only the entry process of a step when it cancels it, so each backup
       # replaces the shell with `exec`. The outputs go to files for the checks below.
@@ -309,6 +273,134 @@ jobs:
         run: |
           if grep --recursive --fixed-strings --files-with-matches \
             --regexp="$BACKUP_PASSWORD" --regexp="$WRONG_PASSWORD" "$RUNNER_TEMP/out"; then
+            echo "::error::An output holds a password"
+            exit 1
+          fi
+      - name: Check that no run directory remains
+        if: always()
+        run: '[ -z "$(ls -A "$RUNNER_TEMP/staging")" ]'
+
+  # The Action of this commit, with a released Svalbard, on a fresh runner. It installs the
+  # clients, backs up PostgreSQL to SFTP, and fails on a wrong password and on a cancellation by
+  # the runner. The checks read the Action's outputs.
+  action:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { postgresql: "18", mysql: "8.4" }
+          - { postgresql: "15", mysql: "9.7" }
+    name: action (PostgreSQL ${{ matrix.postgresql }}, MySQL ${{ matrix.mysql }})
+    env:
+      POSTGRESQL_VERSION: ${{ matrix.postgresql }}
+      MYSQL_SERIES: ${{ matrix.mysql }}
+      COMPOSE_FILE: tests/docker/compose.yaml:tests/docker/ports.yaml
+      # The public keys of the Floci emulator. The setup key `test` skips its IAM checks.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the servers
+        run: docker compose up --detach --quiet-pull postgresql mysql floci ssh
+      - name: Prepare the servers
+        run: tests/clean-runner/prepare.sh
+      - name: Back up PostgreSQL to SFTP
+        id: backup
+        uses: ./action
+        with:
+          version: 0.1.0
+          config: tests/clean-runner/postgresql-sftp.toml
+          postgresql: ${{ matrix.postgresql }}
+          mysql: ${{ matrix.mysql }}
+        env:
+          SVALBARD_SOURCE_PASSWORD: ${{ env.BACKUP_PASSWORD }}
+          SVALBARD_SOURCE_TLS_CA_FILE: ${{ runner.temp }}/ca.crt
+          SVALBARD_DESTINATION_IDENTITY_FILE: ${{ runner.temp }}/ssh-key
+          SVALBARD_DESTINATION_KNOWN_HOSTS_FILE: ${{ runner.temp }}/known_hosts
+          SVALBARD_SAFETY_STAGING_DIR: ${{ runner.temp }}/staging
+      - name: Check the backup
+        working-directory: ${{ runner.temp }}/restore
+        env:
+          RESULT: ${{ steps.backup.outputs.result }}
+          DATA: ${{ steps.backup.outputs.data }}
+          RECORD: ${{ steps.backup.outputs.record }}
+          SHA256: ${{ steps.backup.outputs.sha256 }}
+        run: |
+          [ "$RESULT" = complete ]
+          sftp -b - -P 2222 -i "$RUNNER_TEMP/ssh-key" -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            backup@127.0.0.1 <<EOF
+          get /srv/backups/$DATA
+          get /srv/backups/$RECORD
+          EOF
+          [ "$(jq --raw-output .sha256 "${RECORD##*/}")" = "$SHA256" ]
+          echo "$SHA256  ${DATA##*/}" | sha256sum --check
+      - name: Back up MySQL with a wrong password
+        id: wrong
+        continue-on-error: true
+        uses: ./action
+        with:
+          version: 0.1.0
+          config: tests/clean-runner/mysql-s3.toml
+        env:
+          SVALBARD_SOURCE_PASSWORD: ${{ env.WRONG_PASSWORD }}
+          SVALBARD_SOURCE_TLS_CA_FILE: ${{ runner.temp }}/ca.crt
+          SVALBARD_DESTINATION_PREFIX: wrong/
+          SVALBARD_SAFETY_STAGING_DIR: ${{ runner.temp }}/staging
+      - name: Hold a lock on the PostgreSQL table
+        timeout-minutes: 2
+        run: |
+          docker compose exec --detach postgresql psql --username=postgres --dbname=app \
+            --command='BEGIN; LOCK TABLE items IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(600)'
+          until [ "$(docker compose exec -T postgresql psql --username=postgres --dbname=app \
+            --tuples-only --no-align --command="SELECT count(*) FROM pg_locks
+              WHERE relation = 'items'::regclass AND mode = 'AccessExclusiveLock' AND granted")" = 1 ]
+          do sleep 1; done
+      # The dump waits for the lock until the runner cancels the step after a minute.
+      - name: Back up PostgreSQL until the runner cancels the step
+        id: cancelled
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: ./action
+        with:
+          version: 0.1.0
+          config: tests/clean-runner/postgresql-sftp.toml
+        env:
+          SVALBARD_SOURCE_PASSWORD: ${{ env.BACKUP_PASSWORD }}
+          SVALBARD_SOURCE_TLS_CA_FILE: ${{ runner.temp }}/ca.crt
+          SVALBARD_DESTINATION_IDENTITY_FILE: ${{ runner.temp }}/ssh-key
+          SVALBARD_DESTINATION_KNOWN_HOSTS_FILE: ${{ runner.temp }}/known_hosts
+          SVALBARD_DESTINATION_PREFIX: cancelled/
+          SVALBARD_SAFETY_STAGING_DIR: ${{ runner.temp }}/staging
+          SVALBARD_SAFETY_LOCK_TIMEOUT: 5min
+      - name: Check the failure and the cancellation
+        env:
+          WRONG_OUTCOME: ${{ steps.wrong.outcome }}
+          WRONG_STAGE: ${{ steps.wrong.outputs.stage }}
+          WRONG_ERROR: ${{ steps.wrong.outputs.error }}
+          CANCELLED_OUTCOME: ${{ steps.cancelled.outcome }}
+          CANCELLED_ERROR: ${{ steps.cancelled.outputs.error }}
+        run: |
+          echo "wrong: $WRONG_OUTCOME $WRONG_STAGE $WRONG_ERROR; cancelled: $CANCELLED_OUTCOME $CANCELLED_ERROR"
+          [ "$WRONG_OUTCOME" = failure ] && [ "$WRONG_STAGE" = dump ] && [ "$WRONG_ERROR" = preflight ]
+          [ "$CANCELLED_OUTCOME" = failure ] && [ "$CANCELLED_ERROR" = cancelled ]
+          # shellcheck disable=SC2016 # The backticks are JMESPath.
+          [ "$(aws --endpoint-url http://127.0.0.1:4566 s3api list-objects-v2 --bucket backups \
+            --prefix wrong/ --query 'length(Contents || `[]`)' --output text)" = 0 ]
+          [ "$(docker compose exec -T postgresql psql --username=postgres --tuples-only --no-align \
+            --command="SELECT count(*) FROM pg_stat_activity WHERE usename = 'backup'")" = 0 ]
+          [ -z "$(docker compose exec -T ssh ls -A /srv/backups/cancelled)" ]
+      - name: Check that no output holds a password
+        if: always()
+        env:
+          OUTPUTS: ${{ steps.backup.outputs.json }} ${{ steps.wrong.outputs.json }} ${{ steps.cancelled.outputs.json }}
+        run: |
+          if grep --fixed-strings --regexp="$BACKUP_PASSWORD" --regexp="$WRONG_PASSWORD" <<<"$OUTPUTS"; then
             echo "::error::An output holds a password"
             exit 1
           fi
