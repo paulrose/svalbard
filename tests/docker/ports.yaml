@@ -1,0 +1,11 @@
+# Publishes the servers of compose.yaml on 127.0.0.1, for the clean-runner CI job, which runs
+# Svalbard and the native clients on the runner itself.
+services:
+  postgresql:
+    ports: ["127.0.0.1:5432:5432"]
+  mysql:
+    ports: ["127.0.0.1:3306:3306"]
+  floci:
+    ports: ["127.0.0.1:4566:4566"]
+  ssh:
+    ports: ["127.0.0.1:2222:22"]

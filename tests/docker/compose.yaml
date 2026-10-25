@@ -1,7 +1,8 @@
 # PostgreSQL and MySQL servers with TLS, a PostgreSQL hot standby, a MySQL replica, a MySQL server
 # without performance_schema, the Floci S3 emulator, an OpenSSH server, and the test runners.
 # scripts/test-integration.sh runs `tests`, and scripts/test-r2.sh runs `r2`.
-# The servers publish no ports. Only the runner on the Compose network can reach them.
+# The servers publish no ports, so only the runner on the Compose network can reach them.
+# ports.yaml publishes them on 127.0.0.1 for the clean-runner CI job.
 # Nothing is built, and nothing is written to the host: the scripts remove the containers,
 # the volumes and the images that they pulled.
 name: svalbard-tests

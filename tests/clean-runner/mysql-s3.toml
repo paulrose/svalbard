@@ -1,0 +1,16 @@
+# The clean-runner CI job: MySQL to S3 on Floci, on the servers that tests/docker/ports.yaml
+# publishes. The job sets the password, the CA file, the Floci keys and the staging directory
+# through environment variables.
+
+[source]
+type = "mysql"
+host = "127.0.0.1"
+database = "app"
+user = "backup"
+
+[destination]
+type = "s3"
+bucket = "backups"
+prefix = "app/"
+region = "us-east-1"
+endpoint = "http://127.0.0.1:4566"
