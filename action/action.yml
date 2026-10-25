@@ -47,7 +47,7 @@ outputs:
     description: The kind of a failure, such as `lock_timeout` or `cancelled`.
     value: ${{ steps.result.outputs.error }}
   json:
-    description: The JSON result of `svalbard backup --json`.
+    description: The JSON result of `svalbard backup --json`. It is also in $RUNNER_TEMP/svalbard-result.json, which keeps it after a step timeout.
     value: ${{ steps.result.outputs.json }}
 
 runs:

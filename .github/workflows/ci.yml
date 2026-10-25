@@ -386,11 +386,12 @@ jobs:
           WRONG_STAGE: ${{ steps.wrong.outputs.stage }}
           WRONG_ERROR: ${{ steps.wrong.outputs.error }}
           CANCELLED_OUTCOME: ${{ steps.cancelled.outcome }}
-          CANCELLED_ERROR: ${{ steps.cancelled.outputs.error }}
         run: |
-          echo "wrong: $WRONG_OUTCOME $WRONG_STAGE $WRONG_ERROR; cancelled: $CANCELLED_OUTCOME $CANCELLED_ERROR"
+          echo "wrong: $WRONG_OUTCOME $WRONG_STAGE $WRONG_ERROR; cancelled: $CANCELLED_OUTCOME"
           [ "$WRONG_OUTCOME" = failure ] && [ "$WRONG_STAGE" = dump ] && [ "$WRONG_ERROR" = preflight ]
-          [ "$CANCELLED_OUTCOME" = failure ] && [ "$CANCELLED_ERROR" = cancelled ]
+          # After a step timeout, the result is only in the file: GitHub stops the Action first.
+          [ "$CANCELLED_OUTCOME" = failure ]
+          jq --exit-status '.result == "failed" and .error == "cancelled"' "$RUNNER_TEMP/svalbard-result.json"
           # shellcheck disable=SC2016 # The backticks are JMESPath.
           [ "$(aws --endpoint-url http://127.0.0.1:4566 s3api list-objects-v2 --bucket backups \
             --prefix wrong/ --query 'length(Contents || `[]`)' --output text)" = 0 ]
@@ -402,7 +403,8 @@ jobs:
         env:
           OUTPUTS: ${{ steps.backup.outputs.json }} ${{ steps.wrong.outputs.json }} ${{ steps.cancelled.outputs.json }}
         run: |
-          if grep --fixed-strings --regexp="$BACKUP_PASSWORD" --regexp="$WRONG_PASSWORD" <<<"$OUTPUTS"; then
+          if grep --fixed-strings --regexp="$BACKUP_PASSWORD" --regexp="$WRONG_PASSWORD" \
+            <<<"$OUTPUTS $(cat "$RUNNER_TEMP/svalbard-result.json")"; then
             echo "::error::An output holds a password"
             exit 1
           fi

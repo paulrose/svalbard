@@ -376,6 +376,8 @@ The other settings and the secrets go in the `env` of the step, as for the CLI. 
 
 The outputs come from the JSON result: `result`, `run-id`, `data`, `record`, `size`, `sha256`, `stage` and `error`, and `json` with the complete result.
 A failed backup fails the step with the exit code of Svalbard, and the outputs describe the failure.
+The Action also writes the result to `$RUNNER_TEMP/svalbard-result.json`.
+When the step reaches its `timeout-minutes`, GitHub stops the Action before it sets the outputs, so only the file has the result. A later step with `if: always()` can read it.
 
 ### Private access
 
