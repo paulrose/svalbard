@@ -30,6 +30,7 @@ Unknown keys, empty values and invalid values are errors.
 | `source.password_file` | None | Path to a file that holds the password |
 | `source.tls` | `verify-full` | `verify-full` or `disable` |
 | `source.tls_ca_file` | The system trust store | Path to a PEM file with the CA certificates |
+| `source.exclude_tables` | Empty | Tables to leave out: `schema.table` for PostgreSQL, `table` for MySQL. See [Excluded tables](#excluded-tables) |
 | `destination.type` | Required | `s3`, `r2`, `sftp` or `scp` |
 | `destination.prefix` | Empty | Prefix for object keys or file names. For SSH: letters, digits, `.`, `_`, `-` and `/`, and its directories must exist |
 | `destination.upload_timeout` | `1h` | `1min` to `24h` |
@@ -54,6 +55,31 @@ Without `source.tls_ca_file`, Svalbard uses the system trust store. Then `pg_dum
 
 A duration is a whole number with `s`, `min` or `h`. A size is a whole number with `B`, `KiB`, `MiB`, `GiB` or `TiB`.
 The [database safety contract](database-safety.md) explains the safety limits.
+
+## Excluded tables
+
+`source.exclude_tables` leaves chosen tables out of the backup, such as caches, sessions or queues:
+
+```toml
+[source]
+exclude_tables = ["public.sessions", "public.cache"]
+```
+
+- Each name is exact and case-sensitive, as the database catalog shows it: `schema.table` for PostgreSQL, and `table` for MySQL.
+- `--source-exclude-tables` and `SVALBARD_SOURCE_EXCLUDE_TABLES` take names separated by commas. The flag can also repeat. They replace the list in the file. Put a name that contains a comma in the file.
+- In a PostgreSQL database whose encoding is not UTF8, use ASCII names.
+
+The backup is complete for every other table. For PostgreSQL, it also leaves out the sequences that an excluded table owns, such as the sequence of a `serial` column.
+The completion record and the JSON result list the excluded tables, and `config check` names them.
+The checks before the dump skip the excluded tables. For example, an excluded MySQL table can use another storage engine, and an excluded PostgreSQL table can be unreadable to the backup role.
+
+Before the dump, Svalbard checks the names. The backup fails before the dump in these cases:
+
+- A name matches no table. For PostgreSQL, the name must be an ordinary table: not a partitioned table, a partition, a view or a sequence.
+- For MySQL, `mysqldump` would also leave out another table or view. It compares names without case, so `Cache` also matches `cache`. Exclude both tables, or rename one.
+- A kept object needs an excluded table, so the restore would fail or the restored database would be broken. Examples are a foreign key, a view, or for PostgreSQL a function that uses the row type of the table, or a column default that uses its sequence.
+
+[Restore](restore.md#excluded-tables) explains what a restore of such a backup contains.
 
 ## Secrets
 

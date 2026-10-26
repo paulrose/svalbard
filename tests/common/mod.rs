@@ -49,6 +49,7 @@ pub fn staged(size: usize) -> (Dump, Run) {
         server_version: "server 1.0".to_owned(),
         size: size as u64,
         sha256: hex(&Sha256::digest(&bytes)),
+        excluded_tables: Vec::new(),
     };
     (dump, run)
 }

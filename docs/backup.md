@@ -34,13 +34,13 @@ Start Svalbard with `exec` there: see [Cancellation and timeouts](ci.md#cancella
 
 ## Output and exit codes
 
-`config check` prints `Configuration is valid.` on stdout.
-With `--json`, stdout gets `{"valid":true}` or `{"valid":false,"error":"<message>"}`.
+`config check` prints `Configuration is valid.` on stdout, and then the [excluded tables](configuration.md#excluded-tables) if there are any.
+With `--json`, stdout gets `{"excluded_tables":[],"valid":true}` or `{"valid":false,"error":"<message>"}`.
 
-`backup` prints `Backup complete: <data> and <record>.` on stdout. With `--json`, stdout gets one object:
+`backup` prints `Backup complete: <data> and <record>.` on stdout, and then the excluded tables if there are any. With `--json`, stdout gets one object:
 
 ```json
-{"result":"complete","run_id":"…","data":"app/….dump","record":"app/….json","size":1048576,"sha256":"…","format":"pg_dump-custom","client_version":"pg_dump (PostgreSQL) 18.0","server_version":"18.0"}
+{"result":"complete","run_id":"…","data":"app/….dump","record":"app/….json","size":1048576,"sha256":"…","format":"pg_dump-custom","client_version":"pg_dump (PostgreSQL) 18.0","server_version":"18.0","excluded_tables":[]}
 {"result":"failed","stage":"transfer","error":"access_denied","message":"…","run_id":"…"}
 ```
 

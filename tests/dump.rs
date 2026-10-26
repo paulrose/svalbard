@@ -92,6 +92,10 @@ impl Source for Fake {
             None => Ok(()),
         }
     }
+
+    fn excluded_tables(&self) -> &[String] {
+        &[]
+    }
 }
 
 fn session() -> Result<Observation, String> {

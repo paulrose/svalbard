@@ -193,6 +193,99 @@ async fn unreadable_objects_fail_before_the_dump() {
 
 #[tokio::test]
 #[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
+async fn excluded_table_is_left_out_and_the_rest_restores() {
+    let fixture = Fixture::create("exclude").await;
+    let admin = fixture.client().await;
+    // Row-level security makes the table unreadable for the backup role.
+    admin
+        .batch_execute(
+            r#"CREATE TABLE "Cache.Entries" (id serial PRIMARY KEY, body text);
+            INSERT INTO "Cache.Entries" (body) SELECT md5(g::text) FROM generate_series(1, 100) g;
+            ALTER TABLE "Cache.Entries" ENABLE ROW LEVEL SECURITY"#,
+        )
+        .await
+        .unwrap();
+    // pg_dump does not lock an excluded table, or read it for its serial sequence, so this lock
+    // does not stop the dump.
+    let holder = fixture.client().await;
+    holder
+        .batch_execute(r#"BEGIN; LOCK TABLE "Cache.Entries" IN ACCESS EXCLUSIVE MODE"#)
+        .await
+        .unwrap();
+    let source = Source {
+        exclude_tables: vec!["public.Cache.Entries".to_owned()],
+        ..fixture.source(Tls::Disable)
+    };
+
+    let (result, run) = dump(source, &safety(), future::pending()).await;
+    let dump = result.expect("the dump must succeed");
+    holder.batch_execute("ROLLBACK").await.unwrap();
+    let restored = fixture.restore(&dump.path).await;
+
+    assert_eq!(dump.excluded_tables, ["public.Cache.Entries"]);
+    let query = r#"SELECT to_regclass('public."Cache.Entries"') IS NULL,
+      to_regclass('public."Cache.Entries_id_seq"') IS NULL"#;
+    let row = restored.query_one(query, &[]).await.unwrap();
+    assert!(
+        row.get::<_, bool>(0) && row.get::<_, bool>(1),
+        "the table and its sequence are absent"
+    );
+    admin
+        .batch_execute(r#"DROP TABLE "Cache.Entries""#)
+        .await
+        .unwrap();
+    assert_eq!(fingerprint(&restored).await, fingerprint(&admin).await);
+    run.remove().unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
+async fn exclusions_that_break_a_restore_fail_before_the_dump() {
+    let fixture = Fixture::create("exclude_checks").await;
+    fixture
+        .client()
+        .await
+        .batch_execute(
+            "CREATE TABLE logs (id int, at date) PARTITION BY RANGE (at);
+            CREATE TABLE logs_2026 PARTITION OF logs FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+            CREATE TABLE cache (id serial);
+            CREATE TABLE copies (id int DEFAULT nextval('cache_id_seq'));
+            CREATE FUNCTION cache_size(c cache) RETURNS int LANGUAGE sql AS 'SELECT 1'",
+        )
+        .await
+        .unwrap();
+
+    for (tables, message) in [
+        (
+            &["public.missing", "public.cache"][..],
+            "names no table: public.missing",
+        ),
+        (
+            &["public.accounts"],
+            "constraint orders_account_id_fkey on table orders",
+        ),
+        (&["public.accounts"], "view balances"),
+        (&["public.cache"], "function cache_size(cache)"),
+        (
+            &["public.cache"],
+            "default value for column id of table copies",
+        ),
+        (&["public.logs"], "only ordinary tables"),
+        (&["public.logs_2026"], "only ordinary tables"),
+    ] {
+        let source = Source {
+            exclude_tables: tables.iter().map(|table| table.to_string()).collect(),
+            ..fixture.source(Tls::Disable)
+        };
+        let error = failure(source, &safety(), future::pending()).await;
+
+        assert_eq!(error.kind, Failure::Preflight, "{tables:?}: {error}");
+        assert!(error.message.contains(message), "{tables:?}: {error}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL: run scripts/test-integration.sh"]
 async fn connection_problems_fail_before_the_dump() {
     let fixture = Fixture::create("connection").await;
     let wrong = Path::new(env!("CARGO_TARGET_TMPDIR")).join("svalbard_connection-wrong");

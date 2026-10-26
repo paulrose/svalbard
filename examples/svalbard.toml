@@ -17,6 +17,8 @@ user = "backup"
 # TLS with a verified certificate and host name. Without tls_ca_file, the system trust store.
 tls = "verify-full"
 # tls_ca_file = "/etc/ssl/certs/db-ca.pem"
+# Tables to leave out of the backup, as schema.table. See docs/configuration.md.
+# exclude_tables = ["public.sessions"]
 
 [destination]
 # s3 or r2. For R2, see examples/r2.toml.

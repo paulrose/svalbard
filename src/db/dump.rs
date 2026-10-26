@@ -140,6 +140,7 @@ async fn dump_to<S: Source>(
         server_version,
         size,
         sha256,
+        excluded_tables: source.excluded_tables().to_vec(),
     })
 }
 

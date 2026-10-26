@@ -342,6 +342,102 @@ async fn unsupported_tables_and_missing_privileges_fail_before_the_dump() {
 
 #[tokio::test]
 #[ignore = "needs MySQL: run scripts/test-integration.sh"]
+async fn excluded_table_is_left_out_and_the_rest_restores() {
+    let _shared = SERVER.read().await;
+    let fixture = Fixture::create("exclude").await;
+    let mut source = fixture.client().await;
+    source
+        .query_drop(
+            "CREATE TABLE cache (id INT PRIMARY KEY, body TEXT) ENGINE = MyISAM;
+             INSERT INTO cache VALUES (1, 'a'), (2, 'b')",
+        )
+        .await
+        .unwrap();
+    // A schema change on an excluded table during the dump does not fail the run.
+    let mut holder = fixture.hold_stall_lock().await;
+    let mut client = fixture.client().await;
+    let change = async {
+        fixture.stalled(&mut client).await;
+        client
+            .query_drop("ALTER TABLE cache ADD COLUMN extra INT")
+            .await
+            .unwrap();
+        holder.query_drop("UNLOCK TABLES").await.unwrap();
+        future::pending::<()>().await;
+    };
+    let excluded = Source {
+        exclude_tables: vec!["cache".to_owned()],
+        ..fixture.source(Tls::Disable)
+    };
+
+    let safety = safety();
+    let (result, run) = tokio::select! {
+        result = dump(excluded, &safety, future::pending()) => result,
+        () = change => unreachable!(),
+    };
+    let dump = result.expect("the dump must succeed");
+    let mut restored = fixture.restore(&dump.path).await;
+
+    assert_eq!(dump.excluded_tables, ["cache"]);
+    let cache: Option<u64> = restored
+        .query_first(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cache'",
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache, Some(0));
+    source.query_drop("DROP TABLE cache").await.unwrap();
+    assert_eq!(
+        fingerprint(&mut restored).await,
+        fingerprint(&mut source).await
+    );
+    run.remove().unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
+async fn exclusions_that_break_a_restore_fail_before_the_dump() {
+    let _shared = SERVER.read().await;
+    let fixture = Fixture::create("exclude_checks").await;
+    let mut client = fixture.client().await;
+    let version: String = client
+        .query_first("SELECT VERSION()")
+        .await
+        .unwrap()
+        .unwrap();
+    let client_version = format!("mysqldump  Ver {version} for Linux");
+    client
+        .query_drop("CREATE TABLE Cache (id INT); CREATE TABLE cache (id INT)")
+        .await
+        .unwrap();
+
+    for (tables, message) in [
+        (&["missing", "Cache"][..], Some("names no table: missing")),
+        (&["accounts"], Some("foreign key orders_ibfk_1 on orders")),
+        (&["accounts"], Some("view balances")),
+        // mysqldump would leave out `cache` too.
+        (&["Cache"], Some("cache (like Cache)")),
+        (&["Cache", "cache"], None),
+    ] {
+        let source = Source {
+            exclude_tables: tables.iter().map(|table| table.to_string()).collect(),
+            ..fixture.source(Tls::Disable)
+        };
+        let result = Mysql::new(source).unwrap().preflight(&client_version).await;
+
+        match message {
+            None => assert_eq!(result, Ok(version.clone()), "{tables:?}"),
+            Some(message) => {
+                let error = result.expect_err(message);
+                assert!(error.contains(message), "{tables:?}: {error}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs MySQL: run scripts/test-integration.sh"]
 async fn connection_problems_fail_before_the_dump() {
     let _shared = SERVER.read().await;
     let fixture = Fixture::create("connection").await;

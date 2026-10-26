@@ -91,15 +91,21 @@ fn check(input: &Input) -> ExitCode {
     let result = input.load();
     if input.json {
         let output = match &result {
-            Ok(_) => serde_json::json!({ "valid": true }),
+            Ok(config) => serde_json::json!({
+                "valid": true,
+                "excluded_tables": config.source.exclude_tables,
+            }),
             Err(error) => serde_json::json!({ "valid": false, "error": error }),
         };
         println!("{output}");
     }
     match result {
-        Ok(_) => {
+        Ok(config) => {
             if !input.json {
                 println!("Configuration is valid.");
+                if let Some(tables) = excluded(&config.source.exclude_tables) {
+                    println!("Backups leave out these tables: {tables}.");
+                }
             }
             ExitCode::SUCCESS
         }
@@ -128,6 +134,9 @@ fn run_backup(input: &Input) -> ExitCode {
                 println!("{output}");
             } else {
                 println!("Backup complete: {} and {}.", report.data, report.record);
+                if let Some(tables) = excluded(&report.excluded_tables) {
+                    println!("Excluded tables: {tables}.");
+                }
             }
             ExitCode::SUCCESS
         }
@@ -145,6 +154,11 @@ fn run_backup(input: &Input) -> ExitCode {
             })
         }
     }
+}
+
+/// The excluded tables as a list for people, or `None` if there are none.
+fn excluded(tables: &[String]) -> Option<String> {
+    (!tables.is_empty()).then(|| tables.join(", "))
 }
 
 /// Runs the backup on one thread: the dump futures are not `Send`, and the client's

@@ -35,3 +35,11 @@ mysql --defaults-extra-file=restore.cnf app_restored <20261022T134500Z-<run id>.
 The dump names no database, so it restores into the database that you give.
 It has no accounts or grants, and the accounts in its `DEFINER` clauses must exist.
 A dump from a replica restores its events disabled: see [MySQL replica](database-safety.md#mysql-replica).
+
+## Excluded tables
+
+The dump does not contain the tables in the record's `excluded_tables`. Every other table restores completely.
+
+- Create the excluded tables after the restore, before the application uses them, for example with the application's migrations.
+- Functions, procedures, triggers and events that use an excluded table restore without an error, but fail when they run.
+- For PostgreSQL, the dump also leaves out the sequences that an excluded table owns, such as the sequence of a `serial` or identity column.
