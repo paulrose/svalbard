@@ -353,7 +353,7 @@ jobs:
         id: backup
         uses: ./action
         with:
-          version: 0.1.0
+          version: 0.2.0
           config: tests/clean-runner/postgresql-sftp.toml
           postgresql: ${{ matrix.postgresql }}
           mysql: ${{ matrix.mysql }}
@@ -384,7 +384,7 @@ jobs:
         continue-on-error: true
         uses: ./action
         with:
-          version: 0.1.0
+          version: 0.2.0
           config: tests/clean-runner/mysql-s3.toml
         env:
           SVALBARD_SOURCE_PASSWORD: ${{ env.WRONG_PASSWORD }}
@@ -407,7 +407,7 @@ jobs:
         continue-on-error: true
         uses: ./action
         with:
-          version: 0.1.0
+          version: 0.2.0
           config: tests/clean-runner/postgresql-sftp.toml
         env:
           SVALBARD_SOURCE_PASSWORD: ${{ env.BACKUP_PASSWORD }}

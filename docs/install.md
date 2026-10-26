@@ -8,7 +8,7 @@ The archive `svalbard-<version>-x86_64-unknown-linux-gnu.tar.gz` holds the `sval
 The binary runs on Linux with glibc 2.39 or newer, such as Ubuntu 24.04.
 
 ```sh
-version=0.1.0
+version=0.2.0
 archive="svalbard-$version-x86_64-unknown-linux-gnu.tar.gz"
 for file in "$archive" SHA256SUMS; do
   curl --fail --silent --show-error --location --remote-name \
