@@ -8,9 +8,9 @@ It can install the database clients, and then it runs one backup with `exec`.
 [`examples/github-actions/backup-action.yml`](../examples/github-actions/backup-action.yml) is a complete workflow.
 
 ```yaml
-- uses: paulrose/svalbard/action@<commit> # v0.1.0
+- uses: paulrose/svalbard/action@<commit> # v0.2.0
   with:
-    version: 0.1.0
+    version: 0.2.0
     config: svalbard.toml
     postgresql: "18"
   env:

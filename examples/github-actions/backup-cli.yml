@@ -25,9 +25,9 @@ jobs:
     # More than dump_timeout and upload_timeout together, so that Svalbard's limits act first.
     timeout-minutes: 150
     env:
-      SVALBARD_VERSION: 0.1.0
+      SVALBARD_VERSION: 0.2.0
       # The SHA-256 of the archive, from SHA256SUMS of the release.
-      SVALBARD_SHA256: e17ef6c847db6cd35eb7d12ec7d385ef8fb503b4a2cf4993fe839b14343516a6
+      SVALBARD_SHA256: 6fa207c24e6ed4297a8fd6319acd737dd4afab5f4e22c03992a41c8346c171e5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
