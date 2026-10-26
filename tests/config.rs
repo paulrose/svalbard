@@ -74,12 +74,86 @@ fn flags_override_environment_which_overrides_file_and_defaults() {
 }
 
 #[test]
+fn excluded_tables_follow_the_precedence_and_appear_in_the_output() {
+    let file = config_file(
+        "exclude-tables",
+        &BASE.replace(
+            "user = \"backup\"\n",
+            "user = \"backup\"\nexclude_tables = [\"public.sessions\", \"jobs.done,old\"]\n",
+        ),
+    );
+    let env = [("SVALBARD_SOURCE_EXCLUDE_TABLES", "public.a,public.b")];
+    let flags = [
+        "--source-exclude-tables",
+        "public.c",
+        "--source-exclude-tables",
+        "public.d",
+    ];
+
+    let (code, stdout, _) = check(&["--config", &file], &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(
+        stdout,
+        "Configuration is valid.\nBackups leave out these tables: public.sessions, jobs.done,old.\n"
+    );
+    for (args, env, tables) in [
+        (&[][..], &env[..], ["public.a", "public.b"]),
+        (&flags[..], &env[..], ["public.c", "public.d"]),
+    ] {
+        let (code, stdout, stderr) = check(&[&["--config", &file, "--json"], args].concat(), env);
+        let result: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be JSON");
+        assert_eq!(code, Some(0), "{stderr}");
+        assert_eq!(result["excluded_tables"], serde_json::json!(tables));
+    }
+}
+
+#[test]
+fn invalid_excluded_table_names_are_rejected() {
+    let postgresql = config_file("exclude-postgresql", BASE);
+    let mysql = config_file("exclude-mysql", &BASE.replace("postgresql", "mysql"));
+
+    for (file, names, error) in [
+        (&postgresql, "public.a,,public.b", Some("has an empty name")),
+        (
+            &postgresql,
+            "sessions",
+            Some("has `sessions`. For PostgreSQL, use schema.table"),
+        ),
+        (
+            &postgresql,
+            ".sessions",
+            Some("has `.sessions`. For PostgreSQL"),
+        ),
+        (
+            &postgresql,
+            "public.a,public.a",
+            Some("has `public.a` twice"),
+        ),
+        (
+            &mysql,
+            "app.sessions",
+            Some("has `app.sessions`. For MySQL, use the table name"),
+        ),
+        (&mysql, "sessions", None),
+    ] {
+        expect(file, &["--source-exclude-tables", names], error);
+    }
+    // CI systems give an empty value for a missing variable.
+    let (code, _, stderr) = check(
+        &["--config", &postgresql],
+        &[("SVALBARD_SOURCE_EXCLUDE_TABLES", "")],
+    );
+    assert_eq!(code, Some(3));
+    assert!(stderr.contains("has an empty name"), "{stderr}");
+}
+
+#[test]
 fn json_output_reports_the_result() {
     let file = config_file("json", BASE);
 
     let (code, stdout, _) = check(&["--config", &file, "--json"], &[]);
     assert_eq!(code, Some(0));
-    assert_eq!(stdout, "{\"valid\":true}\n");
+    assert_eq!(stdout, "{\"excluded_tables\":[],\"valid\":true}\n");
 
     let (code, stdout, stderr) = check(
         &["--config", &file, "--json", "--safety-dump-timeout", "2d"],

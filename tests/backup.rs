@@ -18,6 +18,7 @@ use common::{
 };
 use rustix::process::{Pid, Signal, kill_process};
 use sha2::{Digest, Sha256};
+use svalbard::config::Source;
 
 #[tokio::test]
 #[ignore = "needs Docker: run scripts/test-integration.sh"]
@@ -49,6 +50,29 @@ async fn postgresql_backup_to_s3_restores() {
         postgresql::fingerprint(&restored).await,
         postgresql::fingerprint(&fixture.client().await).await
     );
+}
+
+#[tokio::test]
+#[ignore = "needs Docker: run scripts/test-integration.sh"]
+async fn excluded_tables_appear_in_the_record_and_the_result() {
+    let fixture = postgresql::Fixture::create("cli_exclude").await;
+    let bucket = floci::bucket("cli-exclude", None).await;
+    let source = Source {
+        exclude_tables: vec!["public.events".to_owned()],
+        ..fixture.source(postgresql::verify_full())
+    };
+    let setup = Setup::new("cli-exclude", &cli::source(&source), &s3(&bucket), "");
+    let outcome = setup.run(postgresql::PASSWORD, POSTGRESQL_SECRETS).await;
+
+    assert_eq!(outcome.code, Some(0), "{outcome:?}");
+    let result = &outcome.result;
+    assert_eq!(
+        result["excluded_tables"],
+        serde_json::json!(["public.events"])
+    );
+    let record = floci::download(&bucket, result["record"].as_str().unwrap());
+    let record: serde_json::Value = serde_json::from_slice(&record).unwrap();
+    assert_eq!(record["excluded_tables"], result["excluded_tables"]);
 }
 
 #[tokio::test]

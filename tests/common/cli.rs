@@ -150,14 +150,16 @@ pub fn source(source: &Source) -> String {
     let Tls::VerifyFull(Some(ca_file)) = &source.tls else {
         panic!("the tests use verify-full with the test CA");
     };
+    // A JSON array of plain strings is also a TOML array.
     format!(
         "[source]\ntype = \"{kind}\"\nhost = \"{}\"\nport = {}\ndatabase = \"{}\"\n\
-         user = \"{}\"\ntls_ca_file = \"{}\"\n",
+         user = \"{}\"\ntls_ca_file = \"{}\"\nexclude_tables = {}\n",
         source.host,
         source.port,
         source.database,
         source.user,
-        ca_file.display()
+        ca_file.display(),
+        serde_json::to_string(&source.exclude_tables).unwrap()
     )
 }
 

@@ -115,6 +115,7 @@ struct Record<'a> {
     server_version: &'a str,
     size: u64,
     sha256: &'a str,
+    excluded_tables: &'a [String],
 }
 
 /// Uploads `dump`, then its completion record, under `prefix`.
@@ -154,6 +155,7 @@ pub async fn store<D: Destination>(
         server_version: &dump.server_version,
         size: dump.size,
         sha256: &dump.sha256,
+        excluded_tables: &dump.excluded_tables,
     })
     .expect("the record serializes");
     let record_path = run.dir.join("record.json");

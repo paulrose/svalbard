@@ -50,6 +50,9 @@ pub trait Source {
     async fn verify(&mut self) -> Result<(), Error> {
         Ok(())
     }
+
+    /// The tables that the dump leaves out, as `source.exclude_tables` names them.
+    fn excluded_tables(&self) -> &[String];
 }
 
 /// The arguments and environment of the client. It runs without a shell, and its environment
@@ -90,6 +93,8 @@ pub struct Dump {
     pub size: u64,
     /// The SHA-256 of the file, in lowercase hexadecimal.
     pub sha256: String,
+    /// The tables that the dump leaves out. It holds every other table.
+    pub excluded_tables: Vec<String>,
 }
 
 #[derive(Debug)]

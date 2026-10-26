@@ -66,6 +66,53 @@ WHERE c.relkind IN ('r', 'p', 'S')
       AND NOT (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user)
       AND (c.relforcerowsecurity OR NOT pg_has_role(c.relowner, 'USAGE'))
   )
+  AND c.oid <> ALL($1)
+ORDER BY 1";
+
+/// The relations that the names in $1 match exactly, whether each is an ordinary table, the OIDs
+/// of the table and of the sequences that it owns, and the names of these sequences. A sequence
+/// owned by a table is in the same schema.
+const EXCLUDED: &str = "SELECT n.nspname || '.' || c.relname, n.nspname, c.relname,
+  c.relkind = 'r' AND NOT c.relispartition, array_prepend(c.oid, s.oids), s.names
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL (
+  SELECT coalesce(array_agg(s.oid), '{}'), coalesce(array_agg(s.relname::text), '{}')
+  FROM pg_depend d
+  JOIN pg_class s ON s.oid = d.objid
+  WHERE d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_class'::regclass
+    AND d.refobjid = c.oid AND d.deptype IN ('a', 'i') AND s.relkind = 'S'
+) s (oids, names)
+WHERE n.nspname || '.' || c.relname = ANY($1)
+  AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'";
+
+/// The kept objects that need a relation in $1 or its row type, so that their restore fails.
+/// A dependent that belongs to a relation in $1 is skipped with it. Constraint triggers
+/// depend on the other table automatically, so they are matched separately.
+const DEPENDENTS: &str = "WITH excluded (classid, objid) AS (
+  SELECT 'pg_class'::regclass, unnest($1::oid[])
+  UNION ALL
+  SELECT 'pg_type'::regclass, unnest(ARRAY[oid, typarray]) FROM pg_type WHERE typrelid = ANY($1)
+)
+SELECT CASE WHEN r.rulename = '_RETURN' THEN pg_describe_object('pg_class'::regclass, r.ev_class, 0)
+  ELSE pg_describe_object(d.classid, d.objid, 0) END
+FROM pg_depend d
+JOIN excluded e ON d.refclassid = e.classid AND d.refobjid = e.objid
+LEFT JOIN pg_rewrite r ON d.classid = 'pg_rewrite'::regclass AND r.oid = d.objid
+WHERE d.deptype = 'n' AND coalesce(CASE d.classid
+    WHEN 'pg_class'::regclass THEN d.objid
+    WHEN 'pg_rewrite'::regclass THEN r.ev_class
+    WHEN 'pg_constraint'::regclass THEN (SELECT conrelid FROM pg_constraint WHERE oid = d.objid)
+    WHEN 'pg_trigger'::regclass THEN (SELECT tgrelid FROM pg_trigger WHERE oid = d.objid)
+    WHEN 'pg_policy'::regclass THEN (SELECT polrelid FROM pg_policy WHERE oid = d.objid)
+    WHEN 'pg_attrdef'::regclass THEN (SELECT adrelid FROM pg_attrdef WHERE oid = d.objid)
+    WHEN 'pg_publication_rel'::regclass
+      THEN (SELECT prrelid FROM pg_publication_rel WHERE oid = d.objid)
+  END, 0::oid) <> ALL($1)
+UNION
+SELECT format('constraint trigger %I on %s', tgname, tgrelid::regclass)
+FROM pg_trigger
+WHERE NOT tgisinternal AND tgconstrrelid = ANY($1) AND tgrelid <> ALL($1)
 ORDER BY 1";
 
 /// A PostgreSQL database. It holds the password in memory.
@@ -76,6 +123,8 @@ pub struct Postgres {
     tls: Option<MakeRustlsConnect>,
     /// The server accepts `client_connection_check_interval`.
     check_interval: bool,
+    /// The `--exclude-table` patterns that the preflight found, for tables and sequences.
+    excluded: Vec<String>,
     control: Option<tokio_postgres::Client>,
 }
 
@@ -102,6 +151,7 @@ impl Postgres {
             password,
             tls,
             check_interval: false,
+            excluded: Vec::new(),
             control: None,
         })
     }
@@ -173,6 +223,8 @@ impl Source for Postgres {
             .ok_or_else(|| {
                 format!("`{client_version}` is not a supported pg_dump. Use pg_dump 15 to 18.")
             })?;
+        // The control connection borrows `self`.
+        let names = self.source.exclude_tables.clone();
         let control = self.control().await?;
         let row = control
             .query_one(
@@ -194,8 +246,9 @@ impl Source for Postgres {
             ));
         }
 
+        let (skipped, excluded) = exclusions(control, &names).await?;
         let denied: Vec<String> = control
-            .query(DENIED, &[])
+            .query(DENIED, &[&skipped])
             .await
             .map_err(|error| describe("PostgreSQL query failed", error))?
             .iter()
@@ -215,6 +268,7 @@ impl Source for Postgres {
             TIMEOUT.as_secs()
         );
         self.check_interval = control.batch_execute(&interval).await.is_ok();
+        self.excluded = excluded;
         Ok(version)
     }
 
@@ -243,17 +297,23 @@ impl Source for Postgres {
             let options = format!("-c client_connection_check_interval={}s", TIMEOUT.as_secs());
             env.push(("PGOPTIONS", options.into()));
         }
+        let mut args: Vec<OsString> = vec![
+            "--format=custom".into(),
+            "--no-password".into(),
+            // A backstop if Svalbard stops. The watchdog ends a lock wait first, as lock_timeout.
+            format!(
+                "--lock-wait-timeout={}s",
+                (safety.lock_timeout + TIMEOUT).as_secs()
+            )
+            .into(),
+        ];
+        args.extend(
+            self.excluded
+                .iter()
+                .map(|pattern| format!("--exclude-table={pattern}").into()),
+        );
         Client {
-            args: vec![
-                "--format=custom".into(),
-                "--no-password".into(),
-                // A backstop if Svalbard stops. The watchdog ends a lock wait first, as lock_timeout.
-                format!(
-                    "--lock-wait-timeout={}s",
-                    (safety.lock_timeout + TIMEOUT).as_secs()
-                )
-                .into(),
-            ],
+            args,
             env,
             credentials: self.password.as_deref().map(password_file),
         }
@@ -295,6 +355,98 @@ impl Source for Postgres {
             .map_err(|error| describe("PostgreSQL query failed", error))?;
         Ok(())
     }
+
+    fn excluded_tables(&self) -> &[String] {
+        &self.source.exclude_tables
+    }
+}
+
+/// Checks `names` from `source.exclude_tables`. Returns the OIDs that the dump skips, and the
+/// `--exclude-table` patterns: the tables and the sequences that they own.
+async fn exclusions(
+    control: &tokio_postgres::Client,
+    names: &[String],
+) -> Result<(Vec<u32>, Vec<String>), String> {
+    if names.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let failed = |error| describe("PostgreSQL query failed", error);
+    // pg_dump sends the patterns in the database encoding.
+    if names.iter().any(|name| !name.is_ascii()) {
+        let row = control
+            .query_one("SELECT current_setting('server_encoding')", &[])
+            .await
+            .map_err(failed)?;
+        let encoding: String = row.get(0);
+        if encoding != "UTF8" {
+            return Err(format!(
+                "the database encoding is {encoding}, so pg_dump cannot match the names in source.exclude_tables that are not ASCII."
+            ));
+        }
+    }
+
+    let rows = control.query(EXCLUDED, &[&names]).await.map_err(failed)?;
+    let (mut skipped, mut patterns) = (Vec::new(), Vec::new());
+    let (mut missing, mut other, mut ambiguous) = (Vec::new(), Vec::new(), Vec::new());
+    for name in names {
+        let matches: Vec<_> = rows
+            .iter()
+            .filter(|row| row.get::<_, &str>(0) == name)
+            .collect();
+        match matches[..] {
+            [] => missing.push(name.clone()),
+            [row] if row.get(3) => {
+                skipped.extend(row.get::<_, Vec<u32>>(4));
+                let schema = row.get(1);
+                patterns.push(pattern(schema, row.get(2)));
+                // Otherwise pg_dump dumps a serial sequence, and waits for the lock of its table.
+                for sequence in row.get::<_, Vec<String>>(5) {
+                    patterns.push(pattern(schema, &sequence));
+                }
+            }
+            [_] => other.push(name.clone()),
+            _ => ambiguous.push(name.clone()),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "source.exclude_tables names no table: {}",
+            listing(&missing)
+        ));
+    }
+    if !other.is_empty() {
+        return Err(format!(
+            "source.exclude_tables can name only ordinary tables, not partitioned tables, partitions, views or sequences: {}",
+            listing(&other)
+        ));
+    }
+    if !ambiguous.is_empty() {
+        return Err(format!(
+            "source.exclude_tables names more than one table with {}",
+            listing(&ambiguous)
+        ));
+    }
+
+    let dependents: Vec<String> = control
+        .query(DEPENDENTS, &[&skipped])
+        .await
+        .map_err(failed)?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    if !dependents.is_empty() {
+        return Err(format!(
+            "these objects need a table in source.exclude_tables, so a restore would fail: {}",
+            listing(&dependents)
+        ));
+    }
+    Ok((skipped, patterns))
+}
+
+/// An exact `pg_dump` pattern for a table. The quotes keep `.`, `*`, `?` and capitals literal.
+fn pattern(schema: &str, table: &str) -> String {
+    let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+    format!("{}.{}", quote(schema), quote(table))
 }
 
 /// The trusted certificates from `ca_file`, or from the system trust store.
@@ -367,5 +519,11 @@ mod tests {
         );
         assert_eq!(client_major("pg_dump (PostgreSQL) 18beta1"), Some(18));
         assert_eq!(client_major("pg_dump (EnterpriseDB) 17.2"), None);
+    }
+
+    #[test]
+    fn patterns_quote_each_name() {
+        assert_eq!(pattern("public", "Cache.*"), r#""public"."Cache.*""#);
+        assert_eq!(pattern("a\"b", "c"), r#""a""b"."c""#);
     }
 }

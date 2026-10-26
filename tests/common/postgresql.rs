@@ -259,6 +259,7 @@ impl Fixture {
             user: self.database.clone(),
             password: Password::File(self.password_file()),
             tls,
+            exclude_tables: Vec::new(),
         }
     }
 

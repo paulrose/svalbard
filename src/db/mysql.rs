@@ -54,10 +54,29 @@ SELECT 0, PROCESSLIST_STATE,
 FROM performance_schema.threads
 WHERE PROCESSLIST_STATE = 'Waiting for table flush'";
 
-const ENGINES: &str = "SELECT CONCAT(TABLE_NAME, ' (', IFNULL(ENGINE, 'no engine'), ')')
+const ENGINES: &str =
+    "SELECT TABLE_NAME, CONCAT(TABLE_NAME, ' (', IFNULL(ENGINE, 'no engine'), ')')
 FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND NOT (ENGINE <=> 'InnoDB')
 ORDER BY TABLE_NAME";
+
+/// The tables and views that `mysqldump --ignore-table` takes for the name ?: it compares the
+/// bytes as latin1 text, ignoring case.
+const MATCHES: &str = "SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND CONVERT(CAST(TABLE_NAME AS BINARY) USING latin1) COLLATE latin1_swedish_ci
+    = CONVERT(CAST(? AS BINARY) USING latin1) COLLATE latin1_swedish_ci";
+
+/// The foreign keys and views of the database, each with its own table and the table it needs.
+const DEPENDENTS: &str = "SELECT CONCAT('foreign key ', CONSTRAINT_NAME, ' on ', TABLE_NAME),
+  TABLE_NAME, REFERENCED_TABLE_NAME
+FROM information_schema.REFERENTIAL_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE() AND UNIQUE_CONSTRAINT_SCHEMA = DATABASE()
+UNION ALL
+SELECT CONCAT('view ', VIEW_NAME), VIEW_NAME, TABLE_NAME
+FROM information_schema.VIEW_TABLE_USAGE
+WHERE VIEW_SCHEMA = DATABASE() AND TABLE_SCHEMA = DATABASE()
+ORDER BY 1";
 
 /// The definition of each table and view. Writes change none of these columns.
 const DEFINITIONS: &str = "SELECT t.TABLE_NAME, CONCAT_WS(',',
@@ -174,9 +193,72 @@ impl Mysql {
         .map(|tables| {
             tables
                 .into_iter()
+                .filter(|(table, _)| !self.source.exclude_tables.contains(table))
                 .map(|(table, sha256)| (table, sha256.finalize().to_vec()))
                 .collect()
         })
+    }
+
+    /// Checks `source.exclude_tables`: each name is a table, `mysqldump` leaves out no other
+    /// table or view for it, and no kept foreign key or view needs an excluded table.
+    async fn check_exclusions(&mut self) -> Result<(), String> {
+        let names = self.source.exclude_tables.clone();
+        if names.is_empty() {
+            return Ok(());
+        }
+        let (matches, dependents) = self
+            .control(async |conn| {
+                let mut matches = Vec::new();
+                for name in &names {
+                    let tables: Vec<(String, String)> = conn.exec(MATCHES, (name,)).await?;
+                    matches.push(tables);
+                }
+                let dependents: Vec<(String, String, String)> = conn.query(DEPENDENTS).await?;
+                Ok((matches, dependents))
+            })
+            .await?;
+
+        let (mut missing, mut others) = (Vec::new(), Vec::new());
+        for (name, tables) in names.iter().zip(matches) {
+            if !tables
+                .iter()
+                .any(|(table, kind)| table == name && kind == "BASE TABLE")
+            {
+                missing.push(name.clone());
+            }
+            others.extend(
+                tables
+                    .into_iter()
+                    .filter(|(table, kind)| {
+                        table != name && (kind != "BASE TABLE" || !names.contains(table))
+                    })
+                    .map(|(table, _)| format!("{table} (like {name})")),
+            );
+        }
+        if !missing.is_empty() {
+            return Err(format!(
+                "source.exclude_tables names no table: {}",
+                listing(&missing)
+            ));
+        }
+        if !others.is_empty() {
+            return Err(format!(
+                "mysqldump would also leave out these tables or views, because it compares names without case: {}",
+                listing(&others)
+            ));
+        }
+        let dependents: Vec<String> = dependents
+            .into_iter()
+            .filter(|(_, table, needed)| names.contains(needed) && !names.contains(table))
+            .map(|(dependent, _, _)| dependent)
+            .collect();
+        if !dependents.is_empty() {
+            return Err(format!(
+                "these objects need a table in source.exclude_tables, so the restored database would be broken: {}",
+                listing(&dependents)
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -230,9 +312,16 @@ impl Source for Mysql {
             ));
         }
 
-        let other_engines = self
-            .control(async |conn| conn.query::<String, _>(ENGINES).await)
-            .await?;
+        // Before the exclusion check, so that the schema check also sees a table created between.
+        self.definitions = Some(self.definitions().await?);
+        self.check_exclusions().await?;
+        let other_engines: Vec<String> = self
+            .control(async |conn| conn.query::<(String, String), _>(ENGINES).await)
+            .await?
+            .into_iter()
+            .filter(|(table, _)| !self.source.exclude_tables.contains(table))
+            .map(|(_, description)| description)
+            .collect();
         if !other_engines.is_empty() {
             return Err(format!(
                 "these tables do not use InnoDB, so the dump cannot read them consistently: {}",
@@ -240,7 +329,6 @@ impl Source for Mysql {
             ));
         }
 
-        self.definitions = Some(self.definitions().await?);
         Ok(version)
     }
 
@@ -268,26 +356,32 @@ impl Source for Mysql {
         }
         let mut defaults_file = OsString::from("--defaults-file=");
         defaults_file.push(credentials);
+        let mut args: Vec<OsString> = vec![
+            // mysqldump reads --defaults-file only as the first argument.
+            defaults_file,
+            "--single-transaction".into(),
+            "--skip-lock-tables".into(),
+            "--quick".into(),
+            "--set-gtid-purged=OFF".into(),
+            "--no-tablespaces".into(),
+            "--routines".into(),
+            "--events".into(),
+            // A backstop if Svalbard stops. The watchdog ends a lock wait first, as lock_timeout.
+            format!(
+                "--init-command=SET SESSION lock_wait_timeout = {}, @svalbard_run = '{run_id}'",
+                (safety.lock_timeout + TIMEOUT).as_secs()
+            )
+            .into(),
+        ];
+        args.extend(
+            source
+                .exclude_tables
+                .iter()
+                .map(|table| format!("--ignore-table={}.{table}", source.database).into()),
+        );
+        args.extend(["--".into(), source.database.clone().into()]);
         Client {
-            args: vec![
-                // mysqldump reads --defaults-file only as the first argument.
-                defaults_file,
-                "--single-transaction".into(),
-                "--skip-lock-tables".into(),
-                "--quick".into(),
-                "--set-gtid-purged=OFF".into(),
-                "--no-tablespaces".into(),
-                "--routines".into(),
-                "--events".into(),
-                // A backstop if Svalbard stops. The watchdog ends a lock wait first, as lock_timeout.
-                format!(
-                    "--init-command=SET SESSION lock_wait_timeout = {}, @svalbard_run = '{run_id}'",
-                    (safety.lock_timeout + TIMEOUT).as_secs()
-                )
-                .into(),
-                "--".into(),
-                source.database.clone().into(),
-            ],
+            args,
             env: Vec::new(),
             credentials: Some(file),
         }
@@ -369,6 +463,10 @@ impl Source for Mysql {
                 listing(&changed)
             ),
         ))
+    }
+
+    fn excluded_tables(&self) -> &[String] {
+        &self.source.exclude_tables
     }
 }
 
@@ -558,6 +656,7 @@ mod tests {
                 user: "backup".to_owned(),
                 password: config::Password::None,
                 tls: Tls::Disable,
+                exclude_tables: vec!["cache".to_owned()],
             },
             password: Some("s3cr3t".to_owned()),
             ca_file: None,
@@ -580,7 +679,10 @@ mod tests {
             .collect();
 
         assert_eq!(args[0], "--defaults-file=/run/credentials");
-        assert_eq!(args[args.len() - 2..], ["--", "-app"]);
+        assert_eq!(
+            args[args.len() - 3..],
+            ["--ignore-table=-app.cache", "--", "-app"]
+        );
         assert!(
             args.iter()
                 .any(|arg| arg.contains("lock_wait_timeout = 15"))

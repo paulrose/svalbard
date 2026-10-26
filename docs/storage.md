@@ -13,7 +13,8 @@ app/20261022T134500Z-<run id>.json   the completion record
 The time is the UTC start of the run. Svalbard uploads the record only after the dump is complete.
 A dump without a record is an incomplete backup. Svalbard never deletes it, because a backup bucket can deny deletes.
 
-The record holds `version` (1), `created`, `run_id`, `data` (the key of the dump), `format`, `client_version`, `server_version`, `size` and `sha256` (hexadecimal).
+The record holds `version` (1), `created`, `run_id`, `data` (the key of the dump), `format`, `client_version`, `server_version`, `size`, `sha256` (hexadecimal) and `excluded_tables`.
+`excluded_tables` lists the [excluded tables](configuration.md#excluded-tables), and is empty if there are none. A record without it is from Svalbard 0.1.0, and its dump has all tables.
 The dump object also carries its SHA-256 as the metadata `x-amz-meta-sha256`.
 
 ## Amazon S3 and S3-compatible services

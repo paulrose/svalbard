@@ -128,11 +128,27 @@ Before the dump starts, Svalbard checks:
 - The client and server versions.
 - The privileges for the dump, for contention detection and for cancellation.
 - The source-specific conditions, such as storage engines.
+- The excluded tables, and the objects that need them. See [Excluded tables](#excluded-tables).
 - The free space in the staging directory.
 - That one detection query succeeds.
 
 If a check fails, no dump starts. A failed detection check gives `detection_unavailable`.
 `dump_timeout` starts only with the client, so the preflight has its own limit of 60 s. A server that accepts the connection and then does not answer gives `preflight`.
+
+### Excluded tables
+
+`source.exclude_tables` lists exact table names that the dump leaves out (see [Configuration](configuration.md#excluded-tables)).
+The backup is then complete for every other table, and the completion record lists the excluded tables.
+For PostgreSQL, the dump also leaves out the sequences that an excluded table owns.
+The client does not read or lock an excluded table, so schema changes on it do not wait for the dump.
+The preflight fails before the dump in these cases:
+
+- A name matches no table. For PostgreSQL, the name must be an ordinary table: not a partitioned table, a partition, a view or a sequence. `pg_dump --exclude-table` on a partitioned table still dumps its partitions, which then cannot attach at restore.
+- For MySQL, `mysqldump` would also leave out a table or view that is not excluded (see the MySQL arguments).
+- A kept object needs an excluded table. For MySQL, these are foreign keys and views. For PostgreSQL, these are the objects in `pg_depend` that need the table, its row type or a sequence that it owns, and constraint triggers that name the table. Examples are foreign keys, views, inheritance children, policies, functions and column defaults.
+
+A view of a missing table fails to restore in both databases. A foreign key to a missing table makes `pg_restore --exit-on-error` fail.
+In MySQL, the dump turns off foreign key checks, so the restore succeeds, but the table with the foreign key then rejects writes.
 
 ### Watchdog
 
@@ -239,6 +255,9 @@ The setting needs a Linux, macOS, illumos or BSD server.
 ### Arguments
 
 Svalbard passes `--format=custom`, `--no-password` and `--lock-wait-timeout`.
+For each excluded table and each sequence that the table owns, it also passes `--exclude-table="<schema>"."<name>"`, with the names from the catalog. The quotes make the pattern match the exact name.
+Otherwise `pg_dump` dumps the sequence of a `serial` column, and waits for the lock of the excluded table to read its definition.
+`pg_dump` sends the pattern in the database encoding, so in a database that is not UTF8, the preflight accepts only ASCII names.
 The connection settings go through `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSSLMODE` and `PGSSLROOTCERT`, and the password through `PGPASSFILE`.
 `PGGSSENCMODE=disable` makes `pg_dump` use TLS as configured, because libpq prefers GSS encryption to TLS.
 
@@ -250,7 +269,7 @@ Svalbard never passes these options:
 | `--serializable-deferrable` | The start of the dump can wait for an indeterminate time. It fails on a standby. |
 | `--enable-row-security` | It dumps only the rows that the role can see. That is a partial backup. |
 | `--role` | Cancellation matches sessions by their login role. |
-| Table, schema and data filters | A filtered dump is a partial backup. |
+| Schema filters, data filters and table patterns | They leave out objects without the checks in [Excluded tables](#excluded-tables). Svalbard excludes only the exact tables in `source.exclude_tables`. |
 
 Svalbard sets the session label through `PGAPPNAME`, for example `svalbard-<run id>`.
 The value has less than 64 ASCII characters and contains no secrets, because all users can see it.
@@ -306,6 +325,7 @@ Without `client_connection_check_interval`, a backend that waits for a lock dete
 
 The preflight lists the tables and sequences that the role cannot read, and the tables with row-level security that applies to the role.
 It includes the configuration tables of extensions, because `pg_dump` dumps their data.
+It skips the excluded tables and the sequences that they own, which `pg_dump` does not dump.
 It does not check large objects.
 
 ### Scope
@@ -331,6 +351,7 @@ While it waits, later reads and writes on the table wait behind it.
 Before the dump, Svalbard reads `information_schema.TABLES` for the database.
 If a base table uses an engine other than InnoDB, the run fails before the dump.
 With `--single-transaction`, `mysqldump` reads MyISAM and MEMORY tables without a lock and without a consistent snapshot.
+An excluded table can use any engine, because `mysqldump` does not read it.
 
 ### Schema changes
 
@@ -340,7 +361,7 @@ The consistent read is not isolated from these statements. The dump can fail, or
 Concurrent schema changes are not supported. Svalbard cannot prevent them, but it detects them:
 
 - A statement that waits for a metadata lock of the dump is contention. The watchdog cancels the backup.
-- Svalbard records the table and column definitions before the client starts and after it exits. If they differ, the run fails with `schema_changed`.
+- Svalbard records the table and column definitions before the client starts and after it exits. If they differ, the run fails with `schema_changed`. The check skips the excluded tables, because `mysqldump` does not read them.
 
 The definitions come from `information_schema.TABLES` (name, type, engine and creation time) and `information_schema.COLUMNS`, with `information_schema_stats_expiry = 0` for the control session.
 Writes do not change these columns.
@@ -366,6 +387,7 @@ Svalbard passes these options:
 | `--no-tablespaces` | Removes the need for the `PROCESS` privilege. |
 | `--init-command="SET SESSION lock_wait_timeout = <lock_timeout + 10 s>, @svalbard_run = '<run id>'"` | Limits each metadata lock wait of the dump on the server, in whole seconds. The watchdog ends the wait first, after `lock_timeout`. Labels the session for detection and cancellation. |
 | `--routines`, `--events` | Includes stored routines and events. Triggers are included by default. |
+| `--ignore-table=<database>.<table>` | For each excluded table. `mysqldump` compares the name with every table and view without case, as latin1 text. The preflight fails if the name also matches a table or view that is not excluded. |
 | `--` before the database name | A database name that starts with `-` stays a name. |
 
 `protocol=TCP` makes `localhost` a TCP host, as for the control connection, and not the Unix socket.
@@ -463,6 +485,7 @@ It stops when it gets the lock, when `lock_wait_timeout` expires, or after `KILL
 The preflight therefore reads `SHOW GRANTS` for the account and its active roles, and requires these privileges on the database or globally.
 Table-level grants and grants on database patterns do not count, and a partial revoke on the database removes a global privilege.
 The error names the missing privileges.
+Excluded tables do not change these requirements. A partial revoke applies to a whole database, so a grant cannot leave out one table.
 
 Use a dedicated backup account without `LOCK TABLES`, `RELOAD`, `FLUSH_TABLES` and `CONNECTION_ADMIN`.
 Then the account cannot take global or table locks, even if an argument is wrong.
@@ -491,7 +514,8 @@ The accounts in `DEFINER` clauses must exist before a restore.
 
 - The supported versions and the version rules for client and server.
 - One dump worker, a fixed argument list and no inherited client options.
-- InnoDB tables only, for MySQL.
+- InnoDB tables only, for MySQL, except excluded tables.
+- Exact names for excluded tables, and no kept object that needs one.
 - Contention detection is available before the dump starts.
 - `lock_timeout`, `contention_timeout`, `dump_timeout`, `max_dump_size` and `min_free_space`.
 - Cancellation of the sessions of this run only.
@@ -507,6 +531,7 @@ The accounts in `DEFINER` clauses must exist before a restore.
 - Server settings do not stop long reads, for example a MySQL `max_execution_time`.
 - The operator sets replica settings such as `max_standby_streaming_delay` and `hot_standby_feedback`.
 - Migrations set their own `lock_timeout`. Svalbard cannot stop a schema change from waiting. It can only cancel the backup.
+- In PostgreSQL, no schema change adds an object that needs an excluded table between the preflight and the start of `pg_dump`.
 - After `SIGKILL` or the loss of the host, cleanup depends on the server-side backstops.
 
 ### Experiments

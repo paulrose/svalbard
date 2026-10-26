@@ -32,6 +32,7 @@ pub struct Report {
     pub format: &'static str,
     pub client_version: String,
     pub server_version: String,
+    pub excluded_tables: Vec<String>,
 }
 
 /// A failed backup. `cleanup_failed` means that something may remain: a backup session, the
@@ -256,6 +257,7 @@ async fn dump_and_store<S: Source, D: Destination>(
         format: dump.format,
         client_version: dump.client_version,
         server_version: dump.server_version,
+        excluded_tables: dump.excluded_tables,
     })
 }
 

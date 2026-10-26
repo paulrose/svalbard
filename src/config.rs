@@ -38,6 +38,8 @@ pub struct Source {
     pub user: String,
     pub password: Password,
     pub tls: Tls,
+    /// Exact table names to leave out: `schema.table` for PostgreSQL, `table` for MySQL.
+    pub exclude_tables: Vec<String>,
 }
 
 /// The database system of the source.
@@ -216,6 +218,13 @@ pub struct SourceSettings {
         value_name = "PATH"
     )]
     pub tls_ca_file: Option<PathBuf>,
+    #[arg(
+        long = "source-exclude-tables",
+        env = "SVALBARD_SOURCE_EXCLUDE_TABLES",
+        value_name = "TABLES",
+        value_delimiter = ','
+    )]
+    pub exclude_tables: Option<Vec<String>>,
 }
 
 #[derive(Args, Debug, Default, Deserialize)]
@@ -400,6 +409,14 @@ pub fn load(
                     .tls_ca_file
                     .as_deref()
                     .or(file_source.tls_ca_file.as_deref()),
+            )?,
+            exclude_tables: exclude_tables(
+                kind,
+                source
+                    .exclude_tables
+                    .as_deref()
+                    .or(file_source.exclude_tables.as_deref())
+                    .unwrap_or_default(),
             )?,
         },
         destination: Destination {
@@ -700,6 +717,35 @@ fn endpoint(provider: Provider, url: Option<String>) -> Result<Option<String>, S
         ));
     }
     Ok(Some(url))
+}
+
+/// The names stay as given: the preflight matches them exactly against the catalog.
+fn exclude_tables(kind: Kind, names: &[String]) -> Result<Vec<String>, String> {
+    for (i, name) in names.iter().enumerate() {
+        if name.is_empty() {
+            return Err("source.exclude_tables has an empty name.".to_owned());
+        }
+        let valid = match kind {
+            Kind::Postgresql => name
+                .split_once('.')
+                .is_some_and(|(schema, table)| !schema.is_empty() && !table.is_empty()),
+            Kind::Mysql => !name.contains('.'),
+        };
+        if !valid {
+            return Err(match kind {
+                Kind::Postgresql => {
+                    format!("source.exclude_tables has `{name}`. For PostgreSQL, use schema.table.")
+                }
+                Kind::Mysql => format!(
+                    "source.exclude_tables has `{name}`. For MySQL, use the table name without the database."
+                ),
+            });
+        }
+        if names[..i].contains(name) {
+            return Err(format!("source.exclude_tables has `{name}` twice."));
+        }
+    }
+    Ok(names.to_vec())
 }
 
 fn tls(mode: Option<&str>, ca_file: Option<&Path>) -> Result<Tls, String> {
